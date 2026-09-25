@@ -1,0 +1,54 @@
+defmodule Porthole.MixProject do
+  use Mix.Project
+
+  @version "0.1.0"
+  @source_url "https://github.com/mimiquate/porthole"
+
+  def project do
+    [
+      app: :porthole,
+      version: @version,
+      elixir: "~> 1.18",
+      elixirc_paths: elixirc_paths(Mix.env()),
+      start_permanent: Mix.env() == :prod,
+      deps: deps(),
+      description: "Read-only SQL over a live BEAM system, built for coding agents.",
+      source_url: @source_url,
+      package: package(),
+      docs: docs()
+    ]
+  end
+
+  def application do
+    [
+      extra_applications: [:logger],
+      mod: {Porthole.Application, []}
+    ]
+  end
+
+  # The demo fixtures (deliberately misbehaving processes) are compiled in dev
+  # too, so they can be started from `iex -S mix` to try queries by hand.
+  defp elixirc_paths(env) when env in [:dev, :test], do: ["lib", "test/support"]
+  defp elixirc_paths(_env), do: ["lib"]
+
+  defp deps do
+    [
+      # Only the querying node needs the SQLite NIF. Nodes that are merely
+      # observed only need the pure-Elixir collectors, so this is optional.
+      {:exqlite, "~> 0.41", optional: true},
+      {:telemetry, "~> 1.3"},
+      {:ex_doc, "~> 0.38", only: :dev, runtime: false}
+    ]
+  end
+
+  defp package do
+    [
+      licenses: ["Apache-2.0"],
+      links: %{"GitHub" => @source_url}
+    ]
+  end
+
+  defp docs do
+    [main: "readme", extras: ["README.md"], source_ref: "v#{@version}"]
+  end
+end
