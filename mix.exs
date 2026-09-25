@@ -21,7 +21,8 @@ defmodule Porthole.MixProject do
 
   def application do
     [
-      extra_applications: [:logger],
+      # :inets provides the HTTP client used by the HTTP transport tests.
+      extra_applications: [:logger] ++ if(Mix.env() == :test, do: [:inets], else: []),
       mod: {Porthole.Application, []}
     ]
   end
@@ -36,6 +37,9 @@ defmodule Porthole.MixProject do
       # Only the querying node needs the SQLite NIF. Nodes that are merely
       # observed only need the pure-Elixir collectors, so this is optional.
       {:exqlite, "~> 0.41", optional: true},
+      # Only the sidecar serving MCP over HTTP needs a web server.
+      {:plug, "~> 1.20", optional: true},
+      {:bandit, "~> 1.12", optional: true},
       {:telemetry, "~> 1.3"},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false}
     ]

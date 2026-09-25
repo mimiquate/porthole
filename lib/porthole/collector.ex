@@ -19,7 +19,7 @@ defmodule Porthole.Collector do
 
     results =
       if nodes == [node()],
-        do: [{:ok, apply(__MODULE__, :collect_local, args)}],
+        do: [local(args)],
         else: :erpc.multicall(nodes, __MODULE__, :collect_local, args, timeout + (window_ms || 0))
 
     Enum.zip(nodes, results)
@@ -35,6 +35,7 @@ defmodule Porthole.Collector do
   """
   @spec collect_local([String.t()], non_neg_integer() | nil, pos_integer()) :: tables()
   def collect_local(names, window_ms, max_rows) do
+    check_otp!()
     tables = for name <- names, do: elem(Table.fetch(name), 1)
     sampled = if window_ms, do: Enum.filter(tables, &(&1.deltas() != [])), else: []
 
@@ -53,11 +54,33 @@ defmodule Porthole.Collector do
     end)
   end
 
+  # Local failures are reported like remote ones instead of failing the query.
+  defp local(args) do
+    {:ok, apply(__MODULE__, :collect_local, args)}
+  rescue
+    exception -> {:error, {:exception, exception, __STACKTRACE__}}
+  end
+
+  # Collectors read single process dictionary keys with Process.info/2, which
+  # older releases reject. Checked per query (never at boot) so an old node
+  # reports an error instead of crashing its host application.
+  @min_otp 27
+
+  defp check_otp! do
+    release = :erlang.system_info(:otp_release) |> List.to_integer()
+
+    if release < @min_otp,
+      do: raise("Porthole needs OTP #{@min_otp}+, this node runs OTP #{release}")
+  end
+
   defp describe({:error, {:erpc, :noconnection}}), do: "node is not reachable"
   defp describe({:error, {:erpc, :timeout}}), do: "collection timed out"
 
   defp describe({:error, {:exception, :undef, [{__MODULE__, _, _, _} | _]}}),
     do: "Porthole is not loaded on this node"
+
+  defp describe({:error, {:exception, exception, _stack}}) when is_exception(exception),
+    do: "collection failed: " <> Porthole.Term.truncate(Exception.message(exception), 500)
 
   defp describe(other), do: "collection failed: " <> Porthole.Term.render(other)
 end

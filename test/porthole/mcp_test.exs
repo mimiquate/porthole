@@ -3,8 +3,14 @@ defmodule Porthole.MCPTest do
 
   alias Porthole.MCP
 
+  @context %{client: "test", opts: []}
+
   defp call(method, params \\ %{}),
-    do: MCP.handle(%{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params}, [])
+    do:
+      MCP.handle(
+        %{"jsonrpc" => "2.0", "id" => 1, "method" => method, "params" => params},
+        @context
+      )
 
   defp query(args), do: call("tools/call", %{"name" => "query", "arguments" => args}).result
 
@@ -30,7 +36,9 @@ defmodule Porthole.MCPTest do
   end
 
   test "notifications and protocol errors" do
-    assert MCP.handle(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, []) == nil
+    assert MCP.handle(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, @context) ==
+             nil
+
     assert %{error: %{code: -32601}} = call("resources/list")
     assert %{error: %{code: -32602}} = call("tools/call", %{"name" => "rm"})
   end

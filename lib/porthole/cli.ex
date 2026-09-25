@@ -20,9 +20,11 @@ defmodule Porthole.CLI do
   ]
 
   @doc false
-  @spec setup!([String.t()]) :: {keyword(), [String.t()]}
-  def setup!(args) do
-    {opts, rest} = OptionParser.parse!(args, strict: @switches)
+  # Returns the query options, the remaining arguments, and the parsed
+  # options (including any task-specific `extra` switches).
+  @spec setup!([String.t()], keyword()) :: {keyword(), [String.t()], keyword()}
+  def setup!(args, extra \\ []) do
+    {opts, rest} = OptionParser.parse!(args, strict: @switches ++ extra)
 
     target =
       if connect = opts[:connect] do
@@ -44,7 +46,7 @@ defmodule Porthole.CLI do
         true -> nil
       end
 
-    {[nodes: nodes, window_ms: opts[:window]], rest}
+    {[nodes: nodes, window_ms: opts[:window]], rest, opts}
   end
 
   defp connect!(target, cookie) do

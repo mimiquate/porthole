@@ -25,13 +25,25 @@ $ mix porthole.query --connect my_app@127.0.0.1 --cookie secret --window 5000 \
 From a remote shell or IEx: `Porthole.print("SELECT ...")`, or
 `Porthole.query/2` for a `Porthole.Result`.
 
-For agents, `mix porthole.mcp` serves an MCP `query` tool on stdio (run
-`mix compile` first):
+For agents, Porthole is an MCP server with one `query` tool.
 
-```json
-{"mcpServers": {"porthole": {"command": "mix",
-  "args": ["porthole.mcp", "--connect", "my_app@127.0.0.1", "--cookie", "secret"]}}}
-```
+- **In development**, `mix porthole.mcp` serves it on stdio, next to the agent
+  (run `mix compile` first):
+
+  ```json
+  {"mcpServers": {"porthole": {"command": "mix",
+    "args": ["porthole.mcp", "--connect", "my_app@localhost", "--cookie", "dev"]}}}
+  ```
+
+- **In production**, `mix porthole.server` runs a sidecar inside the cluster
+  that holds the cookie and serves MCP over HTTP. Agents get a URL and a token
+  (`mix porthole.gen.token`), never the cookie:
+
+  ```console
+  $ mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" --all-nodes --bind 0.0.0.0
+  $ claude mcp add --transport http porthole https://porthole.internal:4040/ \
+      --header "Authorization: Bearer ph_..."
+  ```
 
 ### Example questions
 
@@ -92,10 +104,15 @@ aggregates and subqueries, and the running system stays the source of truth.
 - **Not atomic.** Processes change while a table is walked.
 - **Sidecar-friendly.** Only the querying node needs SQLite (`exqlite` is an
   optional dependency). Observed nodes need only the pure-Elixir collectors.
+- **Authenticated.** The HTTP server requires a bearer token per client; each
+  token carries its own policy, and removing it revokes access.
 - **Policies** define every tier (`observe`, `trace`, `evaluate`, `mutate`)
   and compose by intersection: `config :porthole, :policy` ∩ session ∩
   request.
-- **Auditable.** Every query emits `[:porthole, :query, *]` telemetry.
+- **Auditable.** Every query from an agent is recorded as structured JSON
+  (client, SQL, nodes, outcome, duration); every query also emits
+  `[:porthole, :query, *]` telemetry.
+- **Versions.** Elixir 1.18+ and OTP 27+ on every node, tested in CI.
 
 ## Development
 

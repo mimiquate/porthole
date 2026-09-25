@@ -86,42 +86,112 @@ mailboxes above 100 are unusual"), and links to your runbooks.
 
 ## Production
 
-In production, the agent should reach the cluster through a **sidecar**: a
-separate VM that joins the cluster as a hidden node, runs the queries (it is
-the only place SQLite runs) and exposes the MCP tool. Production nodes need
-only the `porthole` dependency in their release.
+In production, agents reach the cluster through a **sidecar**: a separate VM
+that joins the cluster as a hidden node, holds the distribution cookie, runs
+the queries (it is the only place SQLite runs) and serves MCP over HTTP.
+Agents get a **URL and a token, never the cookie**.
 
-```console
-$ mix porthole.mcp --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" --all-nodes
+```
+Agent ──HTTPS + token──▶ sidecar (holds the cookie) ──distribution──▶ your nodes
 ```
 
+Production nodes only need the `porthole` dependency in their release. The
+sidecar is a project that depends on `porthole`, `exqlite`, `plug` and
+`bandit`, deployed inside the cluster's private network.
+
+### 1. Create a token per client
+
+Each agent, team or person gets its own token, so the audit log says who
+asked and each can be revoked on its own:
+
+```console
+$ mix porthole.gen.token oncall
+Token for oncall (give this to the client; it is shown only once):
+
+    ph_EXAMPLE-not-a-real-token
+
+Add the entry to the server's config (one entry per client in the list):
+
+    config :porthole, :tokens, [
+      [id: "oncall", sha256: "fd07d512979f51c4..."]
+    ]
+```
+
+Only the hash goes in the sidecar's configuration. A token can carry a policy
+that narrows what that client sees:
+
+```elixir
+config :porthole, :tokens, [
+  [id: "oncall", sha256: "fd07d5..."],
+  [id: "ci-deploy-check", sha256: "60303a...", policy: [max_result_rows: 50]],
+  [id: "contractor", sha256: "b5bb9d...", policy: [nodes: [:"my_app@staging-1"]]]
+]
+```
+
+Removing an entry revokes the token.
+
+### 2. Run the sidecar
+
+```console
+$ mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" \
+    --all-nodes --bind 0.0.0.0 --port 4040
+```
+
+Or add it to the sidecar's supervision tree:
+
+```elixir
+children = [
+  {Porthole.Server, port: 4040, ip: {0, 0, 0, 0}, query_opts: [nodes: :all]}
+]
+```
+
+The server refuses to start without at least one token. It listens on
+`127.0.0.1` unless told otherwise, and serves HTTPS with `--certfile` and
+`--keyfile`. Without those, terminate TLS in front of it (ingress, load
+balancer): tokens must not travel in clear text outside a trusted network.
+
 `--all-nodes` makes every query fan out to the target and every node it is
-connected to, and each row carries its `node`.
+connected to; each row carries its `node`.
+
+### 3. Connect the agent
+
+```console
+$ claude mcp add --transport http porthole https://porthole.internal:4040/ \
+    --header "Authorization: Bearer ph_EXAMPLE-not-a-real-token"
+```
+
+Other MCP clients take the same URL and header.
 
 ### Understand the trust boundary
 
-Porthole guarantees that **its tool** is read-only: queries cannot write, and
-collectors only read metadata. But the sidecar holds the distribution cookie,
-and **the cookie grants full control of the cluster**: anything with it can
-connect and run arbitrary code. So:
+Porthole guarantees that **its tool** is read-only: queries cannot write,
+and collectors only read metadata. The cookie is different: in Erlang
+distribution it grants full control of the cluster, and there is no
+read-only cookie. The sidecar keeps it out of the agent's reach, which holds
+as long as:
 
-- The agent must have the MCP tool, **not** the cookie. Do not run a
-  production sidecar where the agent also has a shell or file access that can
-  read the cookie (from `.mcp.json`, environment variables or process
-  arguments): with the cookie, it could bypass Porthole entirely.
-- In practice today: run production investigations from a client without
-  shell access for the agent, or keep the sidecar on a host the agent cannot
-  inspect. A remote (HTTP) MCP transport that keeps the cookie off the
-  agent's machine entirely is planned.
-- Scope the sidecar with a policy (below), and review the audit log.
+- **Porthole is the agent's only route into production.** An agent that
+  also has SSH, `kubectl exec`, `bin/my_app rpc` or cloud credentials can
+  bypass it.
+- **The sidecar is protected like any service holding cluster credentials.**
+  Whoever controls its host has the cookie.
+- **Everything outside the cluster goes over TLS**, since tokens are bearer
+  credentials.
+
+Observe access still reveals information (process and table names, labels,
+the addresses your nodes connect to, versions). That is usually fine for an
+engineering team, but it is a deliberate grant: scope tokens with policies.
+
+The requests are checked before any work is done: missing or unknown tokens
+get `401`, requests from browsers (with an `Origin` header) get `403` unless
+allowed with `:allowed_origins`, and bodies over 1 MB are rejected.
 
 ### Policy
 
-The node running the queries reads its policy from config. Everything a
-request asks for is intersected with it, so it can only narrow:
+The environment policy is read from the sidecar's config. Every token's
+policy and every request is intersected with it, so they can only narrow:
 
 ```elixir
-# config/config.exs (or runtime.exs) of the project running the sidecar
 config :porthole, :policy,
   nodes: [:"my_app@10.0.1.12", :"my_app@10.0.1.13"],
   max_rows: 50_000,
@@ -136,16 +206,25 @@ tiers are defined so policies can be written against them, and they return a
 
 ### Audit
 
-The MCP server logs every query to stderr: the SQL, the nodes, the window
-and the outcome. Keep those logs: they record exactly what the agent looked
-at.
+Every query is recorded as one JSON object: who asked (the token id), from
+where, the SQL, nodes, window, outcome and duration. By default it is logged
+at `:info` level:
 
 ```text
-[info] porthole query [3 rows] nodes=[:"my_app@10.0.1.12"] window_ms=10000: SELECT ...
+[info] porthole.audit {"at":"2026-09-25T19:41:01.504Z","client":"oncall","remote_ip":"10.0.3.7","sql":"SELECT ...","nodes":["my_app@10.0.1.12"],"window_ms":null,"status":"ok","rows":2,"truncated":false,"error":null,"duration_ms":16}
 ```
 
-When calling `Porthole.query/2` from your own code, attach to the
-`[:porthole, :query, :stop]` telemetry event instead.
+To send records elsewhere, configure a function that receives each record:
+
+```elixir
+config :porthole, :audit, {MyOps.Audit, :record, []}
+```
+
+### Versions
+
+Porthole needs Elixir 1.18+ and OTP 27+ on every node, including the
+observed ones. A node on an older OTP answers with a clear error in
+`errors` (the rest of the cluster still answers) and is never crashed by it.
 
 ### Cost
 

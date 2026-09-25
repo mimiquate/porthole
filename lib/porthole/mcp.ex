@@ -1,16 +1,31 @@
 defmodule Porthole.MCP do
   @moduledoc """
-  An MCP server over stdio (newline-delimited JSON-RPC), exposing one tool,
-  `query`, whose description embeds the schema.
+  The MCP protocol, exposing one tool, `query`, whose description embeds the
+  schema.
 
-  `handle/2` is the protocol, and `serve/1` is the stdio loop. stdout carries
-  protocol messages only, so `serve/1` sends logs to stderr.
+  `handle/2` is the transport-independent protocol. Two transports use it:
+  `serve/1` (stdio, newline-delimited JSON-RPC, for local use) and
+  `Porthole.MCP.Plug` (Streamable HTTP, for a sidecar in production).
 
-  Every query an agent runs is logged at `:info` level (SQL, nodes, outcome),
-  which is the audit trail of what the agent looked at.
+  Every query is recorded with `Porthole.Audit`.
   """
 
-  require Logger
+  alias Porthole.Audit
+
+  @typedoc """
+  Who is asking and with which defaults:
+
+    * `:client` - the client id recorded in the audit log.
+    * `:remote_ip` - the client address, when known.
+    * `:opts` - query options applied to every query (nodes, window,
+      policy); request arguments are merged on top and can only narrow the
+      policy.
+  """
+  @type context :: %{
+          required(:client) => String.t(),
+          required(:opts) => keyword(),
+          optional(:remote_ip) => String.t()
+        }
 
   @doc "Serves MCP on stdio until stdin closes. `query_opts` apply to every query."
   @spec serve(keyword()) :: :ok
@@ -25,20 +40,20 @@ defmodule Porthole.MCP do
         put_in(config, [:config, :type], :standard_error)
       )
 
-    loop(query_opts)
+    loop(%{client: "stdio", opts: query_opts})
   end
 
-  defp loop(query_opts) do
+  defp loop(context) do
     case IO.read(:stdio, :line) do
       line when is_binary(line) ->
         reply =
           case JSON.decode(line) do
-            {:ok, message} -> handle(message, query_opts)
+            {:ok, message} -> handle(message, context)
             {:error, _} -> error(nil, -32700, "parse error")
           end
 
         if reply, do: IO.write([JSON.encode!(reply), ?\n])
-        loop(query_opts)
+        loop(context)
 
       _eof_or_error ->
         :ok
@@ -46,18 +61,23 @@ defmodule Porthole.MCP do
   end
 
   @doc "Handles one JSON-RPC message. Returns the reply, or `nil` for notifications."
-  @spec handle(map(), keyword()) :: map() | nil
-  def handle(%{"id" => id, "method" => method} = message, query_opts) do
-    case request(method, message["params"] || %{}, query_opts) do
+  @spec handle(term(), context()) :: map() | nil
+  def handle(%{"id" => id, "method" => method} = message, context) do
+    case request(method, message["params"] || %{}, context) do
       {:ok, result} -> %{jsonrpc: "2.0", id: id, result: result}
       {:error, code, text} -> error(id, code, text)
     end
   end
 
-  def handle(%{"method" => _notification}, _query_opts), do: nil
-  def handle(_other, _query_opts), do: error(nil, -32600, "invalid request")
+  def handle(%{"method" => _notification}, _context), do: nil
+  def handle(_other, _context), do: error(nil, -32600, "invalid request")
 
-  defp request("initialize", params, _opts) do
+  @doc false
+  @spec error(term(), integer(), String.t()) :: map()
+  def error(id, code, message),
+    do: %{jsonrpc: "2.0", id: id, error: %{code: code, message: message}}
+
+  defp request("initialize", params, _context) do
     {:ok,
      %{
        protocolVersion: params["protocolVersion"] || "2025-06-18",
@@ -66,19 +86,20 @@ defmodule Porthole.MCP do
      }}
   end
 
-  defp request("ping", _params, _opts), do: {:ok, %{}}
-  defp request("tools/list", _params, _opts), do: {:ok, %{tools: [tool()]}}
+  defp request("ping", _params, _context), do: {:ok, %{}}
+  defp request("tools/list", _params, _context), do: {:ok, %{tools: [tool()]}}
 
-  defp request("tools/call", %{"name" => "query", "arguments" => %{"sql" => sql} = args}, opts)
+  defp request("tools/call", %{"name" => "query", "arguments" => %{"sql" => sql} = args}, context)
        when is_binary(sql) do
     request_opts =
       for {key, value} <- [window_ms: args["window_ms"], nodes: args["nodes"]],
           value != nil,
           do: {key, value}
 
-    opts = Keyword.merge(opts, request_opts)
+    opts = Keyword.merge(context.opts, request_opts)
+    started = System.monotonic_time(:millisecond)
     outcome = Porthole.query(sql, opts)
-    audit(sql, opts, outcome)
+    Audit.record(context, sql, opts, outcome, System.monotonic_time(:millisecond) - started)
 
     {:ok,
      case outcome do
@@ -91,23 +112,10 @@ defmodule Porthole.MCP do
      end}
   end
 
-  defp request("tools/call", _params, _opts), do: {:error, -32602, "unknown tool or missing sql"}
-  defp request(method, _params, _opts), do: {:error, -32601, "method not found: #{method}"}
+  defp request("tools/call", _params, _context),
+    do: {:error, -32602, "unknown tool or missing sql"}
 
-  defp audit(sql, opts, outcome) do
-    status =
-      case outcome do
-        {:ok, result} -> "#{length(result.rows)} rows#{if result.truncated, do: " (truncated)"}"
-        {:error, error} -> "error #{error.reason}"
-      end
-
-    Logger.info(
-      "porthole query [#{status}] nodes=#{inspect(opts[:nodes])} window_ms=#{inspect(opts[:window_ms])}: #{sql}"
-    )
-  end
-
-  defp error(id, code, message),
-    do: %{jsonrpc: "2.0", id: id, error: %{code: code, message: message}}
+  defp request(method, _params, _context), do: {:error, -32601, "method not found: #{method}"}
 
   defp tool do
     %{
@@ -149,7 +157,8 @@ defmodule Porthole.MCP do
     """
     Read-only SQL (SQLite) over the live Erlang/Elixir system. Tables are collected fresh for every \
     query; this is not an atomic snapshot. Every table has a `node` column: join on it as well as on pids. \
-    Booleans are 0/1, memory is in bytes. Results are capped: if `truncated` is true, read `notes`.
+    Booleans are 0/1, memory is in bytes. Results are capped: if `truncated` is true, read `notes`. \
+    If `errors` is not empty, rows from those nodes are missing from the result.
 
     #{Enum.join(tables, "\n")}
     """

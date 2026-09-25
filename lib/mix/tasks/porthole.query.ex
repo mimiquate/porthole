@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Porthole.Query do
   @impl true
   def run(args) do
     {json?, args} = {"--json" in args, List.delete(args, "--json")}
-    {opts, rest} = Porthole.CLI.setup!(args)
+    {opts, rest, _parsed} = Porthole.CLI.setup!(args)
     [sql] = rest
     outcome = Porthole.query(sql, opts)
 

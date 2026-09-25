@@ -22,3 +22,6 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 porthole-*.tar
 
+
+# Per-toolchain build dirs when testing other Elixir/OTP versions locally.
+/_build_*/

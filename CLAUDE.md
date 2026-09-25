@@ -45,6 +45,10 @@ when a real question needs it.
   - CLI: `mix porthole.query` (local, `--demo`, or `--connect` to a running node)
   - remote shell / IEx: `Porthole.print/2`
   - MCP over stdio: `mix porthole.mcp`, a single `query` tool whose description embeds the schema
+    (for development, next to the agent)
+  - MCP over HTTP: `mix porthole.server` / `Porthole.Server` (`Porthole.MCP.Plug` on Bandit), the
+    production sidecar, with per-client bearer tokens (`mix porthole.gen.token`, only SHA-256
+    hashes in config), per-token policies, Origin checks, and structured audit (`Porthole.Audit`)
 - **Guides** for the community in `guides/`: use cases, query cookbook, team setup.
 
 ### Out of scope (for now)
@@ -56,7 +60,9 @@ when a real question needs it.
 - Redaction beyond basic `Inspect` respect (planned; don't design it out)
 - Column pruning and filter pushdown (tried and removed for simplicity; revisit only if
   collection cost shows up on large nodes, and only for the expensive items like `:binary`)
-- Remote (HTTP) MCP transport and an in-app dev endpoint (next candidates; see "Trust boundary")
+- In-app dev endpoint, packaged sidecar (release/image), node discovery, `doctor`, rate and
+  concurrency limits, production-side guardrails (low priority, byte caps): see the roadmap
+  phases in the production-readiness discussion; next up are rate limits and guardrails
 - Crash reasons (would need a logger-fed ring buffer, i.e. state; needs a decision) and
   mailbox contents (`process_info(:messages)` copies the whole queue; risky)
 
@@ -110,10 +116,23 @@ looking, answers are exact "now", no state. History is out of scope.
 ### Trust boundary (important)
 
 Porthole guarantees that *its tool* is read-only. The node running queries holds the
-distribution cookie, which grants full control of the cluster. With stdio MCP the cookie is in
-`.mcp.json` / process args, so an agent with shell access could bypass Porthole. Never
-present Porthole as a security boundary on its own; the team-setup guide documents this. A
-remote HTTP transport that keeps the cookie away from the agent is the planned fix.
+distribution cookie, which grants full control of the cluster (there is no read-only cookie).
+In production the HTTP sidecar keeps the cookie inside the cluster and agents only get a URL
+and a token. That holds only if Porthole is the agent's only route into production and the
+sidecar host is protected; the stdio transport puts the cookie next to the agent and is for
+development. Never present Porthole as a security boundary on its own.
+
+HTTP requests are checked before any work: bearer token (401), `Origin` allowlist (403,
+DNS-rebinding protection), 1 MB body cap. The server refuses to start without tokens and
+binds to 127.0.0.1 by default. Plug and Bandit are optional deps; modules using them are
+wrapped in `if Code.ensure_loaded?(...)`.
+
+### Versions
+
+Elixir 1.18+ (built-in `JSON`) and OTP 27+ (`Process.info/2` with `{:dictionary, key}` fails
+on OTP 25; OTP 26 is untested). CI (`.github/workflows/ci.yml`) runs 1.18/27, 1.19/28 and
+1.20/29. The collector checks the OTP version per query and reports old nodes in `errors`;
+never add checks that could crash a host application at boot.
 
 ### Capability tiers (the model is designed now, only Observe is implemented)
 
