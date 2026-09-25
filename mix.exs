@@ -49,6 +49,11 @@ defmodule Porthole.MixProject do
   end
 
   defp docs do
-    [main: "readme", extras: ["README.md"], source_ref: "v#{@version}"]
+    [
+      main: "readme",
+      source_ref: "v#{@version}",
+      extras: ["README.md", "guides/use-cases.md", "guides/cookbook.md", "guides/team-setup.md"],
+      groups_for_extras: [Guides: ~r/guides\//]
+    ]
   end
 end

@@ -1,0 +1,131 @@
+defmodule Porthole.QueryTest do
+  use ExUnit.Case, async: false
+
+  alias Porthole.{Error, Policy, Result}
+
+  test "joins across tables" do
+    result =
+      Porthole.query!("""
+      SELECT e.name, p.registered_name FROM ets_tables e
+      JOIN processes p ON p.node = e.node AND p.pid = e.owner
+      WHERE e.name = 'ac_tab'
+      """)
+
+    assert result.rows == [["ac_tab", "application_controller"]]
+    refute result.truncated
+  end
+
+  test "writes are denied by SQLite itself" do
+    for sql <- [
+          "DELETE FROM processes",
+          "WITH x AS (SELECT 1) DELETE FROM processes",
+          "INSERT INTO applications (name) VALUES ('x')",
+          "ATTACH DATABASE 'evil.db' AS evil",
+          "PRAGMA writable_schema = 1",
+          "CREATE TABLE t (a)"
+        ] do
+      assert {:error, %Error{reason: :read_only}} = Porthole.query(sql), sql
+    end
+
+    refute File.exists?("evil.db")
+  end
+
+  test "SQL errors explain what is available" do
+    assert {:error, %Error{reason: :sql_error, message: message}} =
+             Porthole.query("SELECT * FROM sockets")
+
+    assert message =~ "processes, supervisors, ets_tables, ports, applications, system"
+  end
+
+  test "_delta columns need a window" do
+    assert {:error, %Error{reason: :window_required}} =
+             Porthole.query("SELECT reductions_delta FROM processes")
+
+    result = Porthole.query!("SELECT max(reductions_delta) FROM processes", window_ms: 50)
+    assert [[max]] = result.rows
+    assert max > 0
+    assert result.window_ms == 50
+  end
+
+  test "rows that did not exist at the start of the window get NULL deltas" do
+    parent = self()
+
+    Task.start(fn ->
+      Process.sleep(30)
+      send(parent, {:spawned, spawn(fn -> Process.sleep(:infinity) end)})
+    end)
+
+    result = Porthole.query!("SELECT pid, memory_delta FROM processes", window_ms: 100)
+    assert_received {:spawned, pid}
+    assert %{"memory_delta" => nil} = Enum.find(Result.maps(result), &(&1["pid"] == inspect(pid)))
+  end
+
+  test "windows are bounded by the policy" do
+    assert {:error, %Error{reason: :bad_request}} =
+             Porthole.query("SELECT 1", window_ms: 10_000_000)
+
+    assert {:error, %Error{reason: :bad_request}} = Porthole.query("SELECT 1", window_ms: 0)
+  end
+
+  test "every cut is flagged with a note" do
+    result = Porthole.query!("SELECT pid FROM processes", max_result_rows: 3)
+    assert length(result.rows) == 3
+    assert result.truncated
+    assert result.notes == ["only the first 3 rows are returned"]
+
+    result = Porthole.query!("SELECT count(*) FROM processes", max_rows: 5)
+    assert result.rows == [[5]]
+    assert [note] = result.notes
+    assert note =~ "processes on #{node()}: collection stopped at 5 rows"
+
+    result = Porthole.query!("SELECT group_concat(pid || pid || pid) FROM processes")
+    assert [[cell]] = result.rows
+    assert byte_size(cell) <= 1_024
+    assert result.notes == ["1 cells were cut to 1024 bytes"]
+  end
+
+  test "runaway queries are cancelled" do
+    sql = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c"
+    assert {:error, %Error{reason: :timeout}} = Porthole.query(sql, timeout_ms: 100)
+  end
+
+  test "policies" do
+    assert {:error, %Error{reason: :not_allowed}} =
+             Porthole.query("SELECT 1", policy: Policy.new(tiers: []))
+
+    Application.put_env(:porthole, :policy, max_result_rows: 2)
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+    assert %{rows: [_, _]} = Porthole.query!("SELECT pid FROM processes", max_result_rows: 100)
+  end
+
+  test "unknown nodes are rejected without creating atoms" do
+    assert {:error, %Error{reason: :bad_request}} =
+             Porthole.query("SELECT 1", nodes: ["nope_#{System.unique_integer()}@x"])
+  end
+
+  test "labels and unreachable supervisors" do
+    labelled = spawn(fn -> Process.set_label({:job, 42}) && Process.sleep(:infinity) end)
+
+    fake_supervisor =
+      spawn(fn ->
+        Process.put(:"$initial_call", {:supervisor, FakeSup, 1})
+        Process.sleep(:infinity)
+      end)
+
+    Process.sleep(10)
+
+    assert Porthole.query!("SELECT label FROM processes WHERE pid = '#{inspect(labelled)}'").rows ==
+             [["{:job, 42}"]]
+
+    assert Porthole.query!(
+             "SELECT child_status FROM supervisors WHERE pid = '#{inspect(fake_supervisor)}'"
+           ).rows ==
+             [["unreachable"]]
+  end
+
+  test "queries emit telemetry for auditing" do
+    ref = :telemetry_test.attach_event_handlers(self(), [[:porthole, :query, :stop]])
+    Porthole.query!("SELECT 1")
+    assert_received {[:porthole, :query, :stop], ^ref, _, %{sql: "SELECT 1", result: {:ok, _}}}
+  end
+end
