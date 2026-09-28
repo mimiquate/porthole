@@ -35,6 +35,25 @@ defmodule Porthole.MCPTest do
              query(%{"sql" => "SELECT max(reductions_delta) FROM processes", "window_ms" => 20})
   end
 
+  test "queries with a dynamic node set are audited with the nodes they ran on" do
+    context = %{client: "sidecar", opts: [nodes: fn -> [node()] end]}
+    Application.put_env(:porthole, :audit, {__MODULE__, :forward_audit, [self()]})
+    on_exit(fn -> Application.delete_env(:porthole, :audit) end)
+
+    message = %{
+      "jsonrpc" => "2.0",
+      "id" => 1,
+      "method" => "tools/call",
+      "params" => %{"name" => "query", "arguments" => %{"sql" => "SELECT 1"}}
+    }
+
+    assert %{result: %{isError: false}} = MCP.handle(message, context)
+    assert_receive {:audit, %{client: "sidecar", nodes: [n]}}
+    assert n == to_string(node())
+  end
+
+  def forward_audit(record, pid), do: send(pid, {:audit, record})
+
   test "notifications and protocol errors" do
     assert MCP.handle(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, @context) ==
              nil

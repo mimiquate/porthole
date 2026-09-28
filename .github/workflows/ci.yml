@@ -51,3 +51,23 @@ jobs:
 
       - run: mix docs
         if: matrix.lint
+
+  sidecar:
+    name: Sidecar (Elixir 1.20 / OTP 29)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sidecar
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.20"
+          otp-version: "29"
+
+      - run: mix deps.get
+      - run: mix format --check-formatted
+      - run: mix compile --warnings-as-errors
+      - run: mix test
+      - run: MIX_ENV=prod mix release

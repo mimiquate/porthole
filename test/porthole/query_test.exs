@@ -122,6 +122,16 @@ defmodule Porthole.QueryTest do
     assert %{rows: [_, _]} = Porthole.query!("SELECT pid FROM processes", max_result_rows: 100)
   end
 
+  test "nodes can be resolved per query, and an empty set is an error" do
+    assert %{nodes: [n]} = Porthole.query!("SELECT 1", nodes: fn -> [node()] end)
+    assert n == to_string(node())
+
+    assert {:error, %Error{reason: :bad_request, message: "there are no nodes to query" <> _}} =
+             Porthole.query("SELECT count(*) FROM processes", nodes: fn -> [] end)
+
+    assert {:error, %Error{reason: :bad_request}} = Porthole.query("SELECT 1", nodes: [])
+  end
+
   test "unknown nodes are rejected without creating atoms" do
     assert {:error, %Error{reason: :bad_request}} =
              Porthole.query("SELECT 1", nodes: ["nope_#{System.unique_integer()}@x"])

@@ -49,6 +49,15 @@ when a real question needs it.
   - MCP over HTTP: `mix porthole.server` / `Porthole.Server` (`Porthole.MCP.Plug` on Bandit), the
     production sidecar, with per-client bearer tokens (`mix porthole.gen.token`, only SHA-256
     hashes in config), per-token policies, Origin checks, and structured audit (`Porthole.Audit`)
+  - In-app development endpoint: `forward "/porthole", Porthole.MCP.Plug, auth: :localhost`
+    (loopback-only, rejects proxied requests and browsers; never in production)
+  - `mix porthole.doctor` (`Porthole.Doctor`): per-node reachability, collector version,
+    OTP, latency and a real collection, with what to fix; `GET /healthz` on the HTTP plug
+- **`sidecar/`**: a separate Mix project (depends on the library by path) that packages the
+  production sidecar as a release and Docker image, configured only by env vars
+  (`PortholeSidecar.Config`), tracking the cluster every 5s (seeds, their peers, DNS
+  discovery; `PortholeSidecar.Cluster`) and passing `nodes: &Cluster.nodes/0` so each query
+  resolves the current node set. Keep it thin: logic belongs in the library.
 - **Guides** for the community in `guides/`: use cases, query cookbook, team setup.
 
 ### Out of scope (for now)
@@ -60,9 +69,8 @@ when a real question needs it.
 - Redaction beyond basic `Inspect` respect (planned; don't design it out)
 - Column pruning and filter pushdown (tried and removed for simplicity; revisit only if
   collection cost shows up on large nodes, and only for the expensive items like `:binary`)
-- Phase 2 of the production roadmap: packaged sidecar (release/image), node discovery,
-  collector version check, `doctor`, deployment recipes, client snippets, in-app dev
-  endpoint. Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package
+- Phase 2 of the production roadmap, remaining: verify the Docker image and a real
+  Kubernetes deployment (the k8s snippet in the guide is untested), more client snippets. Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package
   split, security review, real-incident evals. Phase 1 (HTTP transport, tokens, per-token
   policy, audit, rate/concurrency limits, on-node deadlines, low priority, byte caps, CI) is
   done

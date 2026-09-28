@@ -5,34 +5,55 @@ defmodule Mix.Tasks.Porthole.Gen.Token do
   Generates a token for one client (an agent, a team, a person):
 
       $ mix porthole.gen.token oncall
+      $ mix porthole.gen.token oncall --url https://porthole.internal:4040/
 
-  It prints the token, to give to the client, and the configuration entry,
-  which stores only the token's hash. The token itself is not stored anywhere
-  and cannot be recovered; generate a new one if it is lost.
+  It prints the token, to give to the client, the server configuration
+  (which stores only the token's hash, either in `config :porthole, :tokens`
+  or in the sidecar's `PORTHOLE_TOKENS`), and the command that connects an
+  agent. The token itself is not stored anywhere and cannot be recovered;
+  generate a new one if it is lost.
+
+  ## Options
+
+    * `--url URL` - the server's URL, used in the connect command.
   """
 
   use Mix.Task
 
   @impl true
-  def run([id]) do
+  def run(args) do
+    case OptionParser.parse(args, strict: [url: :string]) do
+      {opts, [id], []} -> generate(id, opts[:url] || "https://porthole.example:4040/")
+      _ -> Mix.raise("usage: mix porthole.gen.token CLIENT_ID [--url URL]")
+    end
+  end
+
+  defp generate(id, url) do
     token = Porthole.Auth.generate()
+    hash = Porthole.Auth.hash(token)
 
     Mix.shell().info("""
     Token for #{id} (give this to the client; it is shown only once):
 
         #{token}
 
-    Add the entry to the server's config (one entry per client in the list):
+    Server configuration, either in config (one entry per client in the list):
 
         config :porthole, :tokens, [
-          [id: #{inspect(id)}, sha256: #{inspect(Porthole.Auth.hash(token))}]
+          [id: #{inspect(id)}, sha256: #{inspect(hash)}]
         ]
 
-    Optionally narrow what this client sees with a policy:
+    or, for the sidecar, in PORTHOLE_TOKENS (comma separated):
 
-          [id: #{inspect(id)}, sha256: "...", policy: [nodes: [:"my_app@10.0.1.12"], max_result_rows: 200]]
+        PORTHOLE_TOKENS=#{id}:#{hash}
+
+    Connect an agent, e.g. Claude Code:
+
+        claude mcp add --transport http porthole #{url} --header "Authorization: Bearer #{token}"
+
+    Optionally narrow what this client sees with a policy (config file only):
+
+        [id: #{inspect(id)}, sha256: "...", policy: [nodes: [:"my_app@10.0.1.12"], queries_per_minute: 10]]
     """)
   end
-
-  def run(_args), do: Mix.raise("usage: mix porthole.gen.token CLIENT_ID")
 end

@@ -171,20 +171,29 @@ Each agent, team or person gets its own token, so the audit log says who
 asked and each can be revoked on its own:
 
 ```console
-$ mix porthole.gen.token oncall
+$ mix porthole.gen.token oncall --url https://porthole.internal:4040/
 Token for oncall (give this to the client; it is shown only once):
 
     ph_EXAMPLE-not-a-real-token
 
-Add the entry to the server's config (one entry per client in the list):
+Server configuration, either in config (one entry per client in the list):
 
     config :porthole, :tokens, [
       [id: "oncall", sha256: "fd07d512979f51c4..."]
     ]
+
+or, for the sidecar, in PORTHOLE_TOKENS (comma separated):
+
+    PORTHOLE_TOKENS=oncall:fd07d512979f51c4...
+
+Connect an agent, e.g. Claude Code:
+
+    claude mcp add --transport http porthole https://porthole.internal:4040/ --header "Authorization: Bearer ph_EXAMPLE-not-a-real-token"
 ```
 
-Only the hash goes in the sidecar's configuration. A token can carry a policy
-that narrows what that client sees:
+Only the hash goes in the server's configuration. A token can carry a policy
+that narrows what that client sees (in a config file, `PORTHOLE_CONFIG` for
+the sidecar):
 
 ```elixir
 config :porthole, :tokens, [
@@ -198,35 +207,90 @@ Removing an entry revokes the token.
 
 ### 2. Run the sidecar
 
+The sidecar is a small application in [`sidecar/`](https://github.com/mimiquate/porthole/tree/main/sidecar),
+configured entirely by environment variables and shipped as a release or a
+Docker image. It keeps itself connected to the cluster: every few seconds it
+resolves its targets (seed nodes, the nodes they are connected to, DNS
+discovery), so nodes that join or leave are picked up without a restart.
+It joins as a hidden node, so it does not appear in your nodes' `Node.list/0`.
+
 ```console
-$ mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" \
-    --all-nodes --bind 0.0.0.0 --port 4040
+$ cd sidecar && MIX_ENV=prod mix release
+$ RELEASE_DISTRIBUTION=name RELEASE_NODE=porthole@10.0.1.50 RELEASE_COOKIE="$RELEASE_COOKIE" \
+  PORTHOLE_TOKENS="oncall:fd07d5...,ci:60303a..." \
+  PORTHOLE_NODES="my_app@10.0.1.12" \
+  _build/prod/rel/porthole_sidecar/bin/porthole_sidecar start
 ```
 
-Or add it to the sidecar's supervision tree:
+| Variable | Meaning | Default |
+|---|---|---|
+| `PORTHOLE_TOKENS` | Clients, `id:sha256,...` (from `mix porthole.gen.token`) | required |
+| `PORTHOLE_NODES` | Seed nodes, comma separated | |
+| `PORTHOLE_DISCOVERY` | `dns:<name>:<basename>`: each A/AAAA record of `<name>` is a node `<basename>@<ip>` | |
+| `PORTHOLE_FOLLOW_PEERS` | Also observe every node the seeds are connected to | `true` |
+| `PORTHOLE_PORT` / `PORTHOLE_BIND` | Where to listen | `4040` / `0.0.0.0` |
+| `PORTHOLE_CERTFILE` / `PORTHOLE_KEYFILE` | Serve HTTPS | |
+| `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
+| `RELEASE_NODE`, `RELEASE_DISTRIBUTION`, `RELEASE_COOKIE` | The sidecar's node name, name type (`name`/`sname`, matching your cluster) and cookie | |
 
-```elixir
-children = [
-  {Porthole.Server, port: 4040, ip: {0, 0, 0, 0}, query_opts: [nodes: :all]}
-]
+Set `PORTHOLE_NODES`, `PORTHOLE_DISCOVERY` or both. The sidecar refuses to
+start without tokens or targets, and a query with no reachable node says so
+instead of returning empty results. `GET /healthz` answers `200 ok` for
+liveness checks, and `mix porthole.doctor` (or the sidecar's logs) tells you
+which nodes it observes and which it cannot reach.
+
+**Docker.** Build from the repository root:
+
+```console
+$ docker build -f sidecar/Dockerfile -t porthole-sidecar .
+$ docker run -p 4040:4040 \
+    -e RELEASE_NODE=porthole@10.0.1.50 -e RELEASE_COOKIE="$RELEASE_COOKIE" \
+    -e PORTHOLE_TOKENS="oncall:fd07d5..." -e PORTHOLE_NODES="my_app@10.0.1.12" \
+    porthole-sidecar
 ```
 
-The server refuses to start without at least one token. It listens on
-`127.0.0.1` unless told otherwise, and serves HTTPS with `--certfile` and
-`--keyfile`. Without those, terminate TLS in front of it (ingress, load
-balancer): tokens must not travel in clear text outside a trusted network.
+Match the image's Elixir/OTP to your cluster (`--build-arg OTP_VERSION=...`).
 
-`--all-nodes` makes every query fan out to the target and every node it is
-connected to; each row carries its `node`.
+**Kubernetes** (sketch, not yet tested on a cluster): run the sidecar as a
+Deployment in the same namespace, with DNS discovery through your app's
+headless Service and the pod IP as its node name:
+
+```yaml
+env:
+  - name: POD_IP
+    valueFrom: {fieldRef: {fieldPath: status.podIP}}
+  - name: RELEASE_NODE
+    value: porthole@$(POD_IP)
+  - name: RELEASE_COOKIE
+    valueFrom: {secretKeyRef: {name: my-app, key: cookie}}
+  - name: PORTHOLE_DISCOVERY
+    value: dns:my-app-headless.default.svc.cluster.local:my_app
+  - name: PORTHOLE_TOKENS
+    valueFrom: {secretKeyRef: {name: porthole, key: tokens}}
+```
+
+**Without the packaged sidecar**, any project that depends on `porthole`,
+`exqlite`, `plug` and `bandit` can run the same server with
+`mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE"
+--all-nodes --bind 0.0.0.0`, or add `{Porthole.Server, ...}` to its
+supervision tree. The server refuses to start without at least one token,
+listens on `127.0.0.1` unless told otherwise, and serves HTTPS with
+`--certfile`/`--keyfile`. Without those, terminate TLS in front of it
+(ingress, load balancer): tokens must not travel in clear text outside a
+trusted network.
 
 ### 3. Connect the agent
+
+`mix porthole.gen.token oncall --url https://porthole.internal:4040/` prints
+the exact command, e.g. for Claude Code:
 
 ```console
 $ claude mcp add --transport http porthole https://porthole.internal:4040/ \
     --header "Authorization: Bearer ph_EXAMPLE-not-a-real-token"
 ```
 
-Other MCP clients take the same URL and header.
+Other MCP clients that support the Streamable HTTP transport with custom
+headers take the same URL and header.
 
 ### Understand the trust boundary
 

@@ -41,7 +41,8 @@ defmodule Porthole.Query do
 
     * `:window_ms` - sample over a window, adding `_delta` columns.
     * `:nodes` - `nil` (this node), `:all` (this node and every connected
-      one) or a list of node names.
+      one), a list of node names, or a zero-arity function returning one of
+      those, called for every query (e.g. a sidecar's current cluster).
     * `:policy` - the session `Porthole.Policy`.
     * `:client` - who is asking (e.g. a token id). Identified clients are
       subject to the policy's `:queries_per_minute`; every query is subject
@@ -137,6 +138,12 @@ defmodule Porthole.Query do
 
   defp nodes(nil), do: {:ok, [node()]}
   defp nodes(:all), do: {:ok, [node() | Node.list()]}
+  defp nodes(fun) when is_function(fun, 0), do: nodes(fun.())
+
+  defp nodes([]),
+    do:
+      {:error,
+       Error.new(:bad_request, "there are no nodes to query (none connected or none requested)")}
 
   defp nodes(names) when is_list(names) do
     # Never create atoms from request input: unknown nodes have no atom yet.

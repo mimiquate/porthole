@@ -41,7 +41,8 @@ defmodule Porthole.Audit do
       client: context.client,
       remote_ip: context[:remote_ip],
       sql: sql,
-      nodes: nodes(opts[:nodes]),
+      # The nodes a query actually ran on when known, otherwise what was asked.
+      nodes: nodes(outcome, opts[:nodes]),
       window_ms: opts[:window_ms],
       duration_ms: duration_ms
     }
@@ -73,7 +74,9 @@ defmodule Porthole.Audit do
     :ok
   end
 
-  defp nodes(nil), do: nil
-  defp nodes(:all), do: "all"
-  defp nodes(nodes), do: Enum.map(nodes, &to_string/1)
+  defp nodes({:ok, result}, _requested), do: result.nodes
+  defp nodes(_error, nil), do: nil
+  defp nodes(_error, :all), do: "all"
+  defp nodes(_error, fun) when is_function(fun), do: "dynamic"
+  defp nodes(_error, nodes), do: Enum.map(nodes, &to_string/1)
 end

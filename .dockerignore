@@ -1,0 +1,12 @@
+# Keep the build context small, and never send local config (tokens) or
+# build artifacts to the Docker daemon.
+_build/
+_build_*/
+deps/
+doc/
+config/
+sidecar/_build/
+sidecar/deps/
+.git/
+*.ez
+erl_crash.dump
