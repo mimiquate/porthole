@@ -2,20 +2,27 @@ defmodule PortholeSidecar.Config do
   @moduledoc """
   The sidecar's configuration, read from environment variables at startup.
 
+  The sidecar needs to know **where** your app's nodes are, not their exact
+  names: it asks each host's Erlang port mapper (epmd, port 4369, already
+  reachable in any cluster) which nodes run there. So in the common case you
+  reuse what your app already uses to find its own nodes:
+
   | Variable | Meaning | Default |
   |---|---|---|
-  | `PORTHOLE_TOKENS` | Clients, as `id:sha256,id:sha256` (hashes from `mix porthole.gen.token`) | required, unless set in `PORTHOLE_CONFIG` |
-  | `PORTHOLE_NODES` | Seed nodes, comma separated, e.g. `my_app@10.0.1.12` | |
-  | `PORTHOLE_DISCOVERY` | DNS discovery, `dns:<name>:<basename>`: every A/AAAA record of `<name>` is a node `<basename>@<ip>` | |
-  | `PORTHOLE_FOLLOW_PEERS` | Also observe every node the seeds are connected to | `true` |
-  | `PORTHOLE_PORT` | HTTP port | `4040` |
-  | `PORTHOLE_BIND` | Interface to listen on | `0.0.0.0` |
+  | `DNS_CLUSTER_QUERY` | The DNS name your app already clusters with (Phoenix's `dns_cluster`); every address it resolves to is a host to look at | |
+  | `PORTHOLE_NODES` | Hosts (`10.0.1.12`) or full node names (`shop@10.0.1.12`), comma separated | |
+  | `PORTHOLE_DISCOVERY` | Like `DNS_CLUSTER_QUERY`, as `dns:<name>`, when the app uses another variable | |
+  | `PORTHOLE_NODE_PREFIX` | Only observe nodes whose name starts with this (when hosts run other Erlang nodes) | all |
+  | `PORTHOLE_TOKENS` | Clients, as `id:sha256,id:sha256` (from `mix porthole.gen.token`) | required, unless in `PORTHOLE_CONFIG` |
+  | `PORTHOLE_FOLLOW_PEERS` | Also observe every node the found nodes are connected to | `true` |
+  | `PORTHOLE_PORT` / `PORTHOLE_BIND` | Where to listen | `4040` / `0.0.0.0` |
   | `PORTHOLE_CERTFILE`, `PORTHOLE_KEYFILE` | Serve HTTPS | |
-  | `PORTHOLE_CONFIG` | Path to an Elixir config file for anything else (per-token policies, the environment policy) | |
+  | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
 
-  At least one of `PORTHOLE_NODES` or `PORTHOLE_DISCOVERY` is required. The
-  node name and cookie come from the release's own variables
-  (`RELEASE_NODE`, `RELEASE_DISTRIBUTION`, `RELEASE_COOKIE`).
+  At least one of `DNS_CLUSTER_QUERY`, `PORTHOLE_DISCOVERY` or
+  `PORTHOLE_NODES` is required. The sidecar's own name and cookie come from
+  the release (`RELEASE_COOKIE`, and `RELEASE_NODE`, which defaults to
+  `porthole@<this machine's IP>`).
 
   `PORTHOLE_CONFIG` points to a file in the usual config format:
 
@@ -33,8 +40,10 @@ defmodule PortholeSidecar.Config do
 
   @type t :: %{
           tokens: [keyword()],
-          seeds: [node()],
-          discovery: nil | {:dns, String.t(), String.t()},
+          nodes: [node()],
+          hosts: [String.t()],
+          dns: [String.t()],
+          prefix: String.t() | nil,
           follow_peers: boolean(),
           port: pos_integer(),
           ip: :inet.ip_address(),
@@ -46,10 +55,15 @@ defmodule PortholeSidecar.Config do
   def from_env!(env \\ System.get_env()) do
     file_config = load_file(env["PORTHOLE_CONFIG"])
 
+    {nodes, hosts} =
+      env |> Map.get("PORTHOLE_NODES", "") |> split() |> Enum.split_with(&(&1 =~ "@"))
+
     config = %{
       tokens: file_config[:tokens] ++ parse_tokens(env["PORTHOLE_TOKENS"]),
-      seeds: env |> Map.get("PORTHOLE_NODES", "") |> split() |> Enum.map(&String.to_atom/1),
-      discovery: parse_discovery(env["PORTHOLE_DISCOVERY"]),
+      nodes: Enum.map(nodes, &String.to_atom/1),
+      hosts: hosts,
+      dns: parse_dns(env["PORTHOLE_DISCOVERY"], env["DNS_CLUSTER_QUERY"]),
+      prefix: blank_to_nil(env["PORTHOLE_NODE_PREFIX"]),
       follow_peers: env["PORTHOLE_FOLLOW_PEERS"] not in ["false", "0"],
       port: parse_port(Map.get(env, "PORTHOLE_PORT", "4040")),
       ip: parse_ip(Map.get(env, "PORTHOLE_BIND", "0.0.0.0")),
@@ -58,8 +72,12 @@ defmodule PortholeSidecar.Config do
 
     if config.tokens == [], do: fail("set PORTHOLE_TOKENS (or :tokens in PORTHOLE_CONFIG)")
 
-    if config.seeds == [] and config.discovery == nil,
-      do: fail("set PORTHOLE_NODES or PORTHOLE_DISCOVERY to say which nodes to observe")
+    if config.nodes == [] and config.hosts == [] and config.dns == [] do
+      fail(
+        "say where your app runs: set DNS_CLUSTER_QUERY (the DNS name your app clusters with), " <>
+          "or PORTHOLE_NODES (hosts or node names)"
+      )
+    end
 
     config
   end
@@ -85,17 +103,14 @@ defmodule PortholeSidecar.Config do
     end
   end
 
-  defp parse_discovery(nil), do: nil
-  defp parse_discovery(""), do: nil
-
-  defp parse_discovery("dns:" <> rest) do
-    case String.split(rest, ":") do
-      [name, basename] when name != "" and basename != "" -> {:dns, name, basename}
-      _ -> fail("PORTHOLE_DISCOVERY must be dns:<name>:<basename>, got: dns:#{rest}")
+  # PORTHOLE_DISCOVERY wins over DNS_CLUSTER_QUERY; both may list several names.
+  defp parse_dns(discovery, dns_cluster_query) do
+    case blank_to_nil(discovery) do
+      nil -> split(dns_cluster_query || "")
+      "dns:" <> names -> names |> split() |> Enum.map(&(&1 |> String.split(":") |> hd()))
+      other -> fail("PORTHOLE_DISCOVERY must be dns:<name>, got: #{inspect(other)}")
     end
   end
-
-  defp parse_discovery(other), do: fail("unsupported PORTHOLE_DISCOVERY: #{inspect(other)}")
 
   defp parse_port(value) do
     case Integer.parse(value) do
@@ -118,7 +133,10 @@ defmodule PortholeSidecar.Config do
 
   defp parse_tls(_, _), do: fail("HTTPS needs both PORTHOLE_CERTFILE and PORTHOLE_KEYFILE")
 
-  defp split(value), do: value |> String.split(",", trim: true) |> Enum.map(&String.trim/1)
+  defp split(value), do: value |> String.split([",", " "], trim: true) |> Enum.map(&String.trim/1)
+
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(value), do: if(String.trim(value) == "", do: nil, else: value)
 
   defp fail(message), do: raise(ArgumentError, "Porthole sidecar: " <> message)
 end

@@ -209,62 +209,84 @@ Removing an entry revokes the token.
 
 The sidecar is a small application in [`sidecar/`](https://github.com/mimiquate/porthole/tree/main/sidecar),
 configured entirely by environment variables and shipped as a release or a
-Docker image. It keeps itself connected to the cluster: every few seconds it
-resolves its targets (seed nodes, the nodes they are connected to, DNS
-discovery), so nodes that join or leave are picked up without a restart.
-It joins as a hidden node, so it does not appear in your nodes' `Node.list/0`.
+Docker image. It joins your cluster as a hidden node (so it does not appear
+in your nodes' `Node.list/0`) and keeps following it: nodes that join or
+leave are picked up within seconds, without a restart.
+
+**You tell it where your app runs, not what its nodes are called.** It asks
+each host's Erlang port mapper (epmd, port 4369, which your cluster already
+uses) which nodes live there. Addresses that change on every deploy, and
+node names that include a release id, are handled for you.
+
+In the common case the sidecar needs three variables, all of which you
+already have:
+
+| Variable | Where it comes from |
+|---|---|
+| `RELEASE_COOKIE` | Your app's cookie |
+| `PORTHOLE_TOKENS` | `mix porthole.gen.token` (step 1) |
+| `DNS_CLUSTER_QUERY` | The same value your app clusters with (Phoenix apps have it, e.g. `my-app.internal` on Fly.io or the headless Service name on Kubernetes) |
 
 ```console
 $ cd sidecar && MIX_ENV=prod mix release
-$ RELEASE_DISTRIBUTION=name RELEASE_NODE=porthole@10.0.1.50 RELEASE_COOKIE="$RELEASE_COOKIE" \
-  PORTHOLE_TOKENS="oncall:fd07d5...,ci:60303a..." \
-  PORTHOLE_NODES="my_app@10.0.1.12" \
+$ RELEASE_COOKIE="$RELEASE_COOKIE" PORTHOLE_TOKENS="oncall:fd07d5..." DNS_CLUSTER_QUERY="my-app.internal" \
   _build/prod/rel/porthole_sidecar/bin/porthole_sidecar start
 ```
 
+The sidecar names itself `porthole@<its IP>` (from `POD_IP`,
+`FLY_PRIVATE_IP`, or the host's address) and uses long names, as clusters
+that find each other by address do.
+
+**If your app does not cluster through DNS**, list where it runs instead:
+`PORTHOLE_NODES=10.0.1.12,10.0.1.13` (hosts), or full node names if you know
+them (`shop@10.0.1.12`). One reachable node is enough when it is connected
+to the rest: the sidecar follows its peers.
+
+All variables:
+
 | Variable | Meaning | Default |
 |---|---|---|
-| `PORTHOLE_TOKENS` | Clients, `id:sha256,...` (from `mix porthole.gen.token`) | required |
-| `PORTHOLE_NODES` | Seed nodes, comma separated | |
-| `PORTHOLE_DISCOVERY` | `dns:<name>:<basename>`: each A/AAAA record of `<name>` is a node `<basename>@<ip>` | |
-| `PORTHOLE_FOLLOW_PEERS` | Also observe every node the seeds are connected to | `true` |
+| `DNS_CLUSTER_QUERY` | DNS name(s) to find your app's hosts | |
+| `PORTHOLE_NODES` | Hosts or full node names, comma separated | |
+| `PORTHOLE_DISCOVERY` | `dns:<name>`, when your app uses another variable than `DNS_CLUSTER_QUERY` | |
+| `PORTHOLE_NODE_PREFIX` | Only observe nodes whose name starts with this (if hosts run other Erlang nodes) | all |
+| `PORTHOLE_FOLLOW_PEERS` | Also observe every node the found nodes are connected to | `true` |
+| `PORTHOLE_TOKENS` | Clients, `id:sha256,...` | required |
 | `PORTHOLE_PORT` / `PORTHOLE_BIND` | Where to listen | `4040` / `0.0.0.0` |
 | `PORTHOLE_CERTFILE` / `PORTHOLE_KEYFILE` | Serve HTTPS | |
 | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
-| `RELEASE_NODE`, `RELEASE_DISTRIBUTION`, `RELEASE_COOKIE` | The sidecar's node name, name type (`name`/`sname`, matching your cluster) and cookie | |
+| `RELEASE_NODE` / `RELEASE_DISTRIBUTION` | Override the sidecar's own name / name type | `porthole@<IP>` / `name` |
 
-Set `PORTHOLE_NODES`, `PORTHOLE_DISCOVERY` or both. The sidecar refuses to
-start without tokens or targets, and a query with no reachable node says so
-instead of returning empty results. `GET /healthz` answers `200 ok` for
-liveness checks, and `mix porthole.doctor` (or the sidecar's logs) tells you
-which nodes it observes and which it cannot reach.
+The sidecar refuses to start without tokens or a place to look, and it logs
+which nodes it observes, which it cannot connect to, and when it finds none.
+Remote consoles (`rem-*`) are never observed. `GET /healthz` answers `200 ok`
+for liveness checks, and `mix porthole.doctor` checks each node in detail.
 
 **Docker.** Build from the repository root:
 
 ```console
 $ docker build -f sidecar/Dockerfile -t porthole-sidecar .
-$ docker run -p 4040:4040 \
-    -e RELEASE_NODE=porthole@10.0.1.50 -e RELEASE_COOKIE="$RELEASE_COOKIE" \
-    -e PORTHOLE_TOKENS="oncall:fd07d5..." -e PORTHOLE_NODES="my_app@10.0.1.12" \
+$ docker run -p 4040:4040 -e RELEASE_COOKIE="$RELEASE_COOKIE" \
+    -e PORTHOLE_TOKENS="oncall:fd07d5..." -e DNS_CLUSTER_QUERY="my-app.internal" \
     porthole-sidecar
 ```
 
 Match the image's Elixir/OTP to your cluster (`--build-arg OTP_VERSION=...`).
+On IPv6-only networks (such as Fly.io's), also pass
+`ERL_AFLAGS="-proto_dist inet6_tcp"`, as your app does.
 
 **Kubernetes** (sketch, not yet tested on a cluster): run the sidecar as a
-Deployment in the same namespace, with DNS discovery through your app's
-headless Service and the pod IP as its node name:
+Deployment in the same namespace, with the app's headless Service as the
+DNS query and the pod IP as its address:
 
 ```yaml
 env:
   - name: POD_IP
     valueFrom: {fieldRef: {fieldPath: status.podIP}}
-  - name: RELEASE_NODE
-    value: porthole@$(POD_IP)
   - name: RELEASE_COOKIE
     valueFrom: {secretKeyRef: {name: my-app, key: cookie}}
-  - name: PORTHOLE_DISCOVERY
-    value: dns:my-app-headless.default.svc.cluster.local:my_app
+  - name: DNS_CLUSTER_QUERY
+    value: my-app-headless.default.svc.cluster.local
   - name: PORTHOLE_TOKENS
     valueFrom: {secretKeyRef: {name: porthole, key: tokens}}
 ```
