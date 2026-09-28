@@ -69,8 +69,13 @@ when a real question needs it.
 - Redaction beyond basic `Inspect` respect (planned; don't design it out)
 - Column pruning and filter pushdown (tried and removed for simplicity; revisit only if
   collection cost shows up on large nodes, and only for the expensive items like `:binary`)
-- Phase 2 of the production roadmap, remaining: verify the Docker image and a real
-  Kubernetes deployment (the k8s snippet in the guide is untested), more client snippets. Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package
+- Phase 2 of the production roadmap, remaining: a real Kubernetes deployment and Fly.io
+  (IPv6, `fly proxy`) are untested (the guide says so), more client snippets, and a
+  versioned sidecar-to-node protocol so sidecar and app can be upgraded independently
+  (for now: upgrade both together; a mismatch is a clear per-node error). The Docker image is
+  verified (2026-09-28): compose with an app on long names and a fixed cookie, discovery
+  from DNS_CLUSTER_QUERY, scaling 1→2→1, wrong cookie, missing config, non-root user.
+  The builder image tag must exist on Docker Hub (hexpm/elixir tags carry a Debian date). Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package
   split, security review, real-incident evals. Phase 1 (HTTP transport, tokens, per-token
   policy, audit, rate/concurrency limits, on-node deadlines, low priority, byte caps, CI) is
   done

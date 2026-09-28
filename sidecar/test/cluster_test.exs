@@ -11,7 +11,7 @@ defmodule PortholeSidecar.ClusterTest do
       :net_kernel.start(:"sidecar_test@127.0.0.1", %{name_domain: :longnames, hidden: true})
 
     peers =
-      for name <- [:shop, :"rem-1a2b-shop", :other_app] do
+      for name <- [:shop, :"rem-1a2b-shop", :"rpc-3c4d-shop", :other_app] do
         {:ok, pid, node} = :peer.start(%{name: name, host: ~c"127.0.0.1", longnames: true})
         {pid, node}
       end
@@ -24,12 +24,13 @@ defmodule PortholeSidecar.ClusterTest do
     Map.merge(%{nodes: [], hosts: [], dns: [], prefix: nil, follow_peers: false}, overrides)
   end
 
-  test "finds the nodes on a host from its port mapper, skipping remote consoles and itself" do
+  test "finds the nodes on a host from its port mapper, skipping tool nodes and itself" do
     targets = Cluster.targets(config(%{hosts: ["127.0.0.1"]}))
 
     assert :"shop@127.0.0.1" in targets
     assert :"other_app@127.0.0.1" in targets
     refute :"rem-1a2b-shop@127.0.0.1" in targets
+    refute :"rpc-3c4d-shop@127.0.0.1" in targets
     refute node() in targets
   end
 

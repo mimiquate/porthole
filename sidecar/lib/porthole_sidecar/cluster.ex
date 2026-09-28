@@ -10,7 +10,8 @@ defmodule PortholeSidecar.Cluster do
        in `PORTHOLE_NODES`.
     2. **Nodes on each host** come from that host's Erlang port mapper (epmd),
        which lists the node names registered there. Remote consoles
-       (`rem-*`), the sidecar's own name and, with `PORTHOLE_NODE_PREFIX`,
+       (`rem-*`), `rpc` calls (`rpc-*`), the sidecar's own name and, with
+       `PORTHOLE_NODE_PREFIX`,
        non-matching names are skipped.
     3. **Peers**: with `PORTHOLE_FOLLOW_PEERS` (the default), every node the
        found nodes are connected to is observed too.
@@ -64,8 +65,13 @@ defmodule PortholeSidecar.Cluster do
   defp refresh(state) do
     Process.send_after(self(), :refresh, @interval)
     targets = targets(state.config)
-    connected = Enum.filter(targets, &(&1 in Node.list(:connected) or Node.connect(&1) == true))
-    missing = targets -- connected
+    # Sorted: DNS answers in rotating order, which is not a change.
+    connected =
+      targets
+      |> Enum.filter(&(&1 in Node.list(:connected) or Node.connect(&1) == true))
+      |> Enum.sort()
+
+    missing = Enum.sort(targets -- connected)
 
     if connected != state.nodes and connected != [] do
       Logger.info("Porthole sidecar observing: #{Enum.join(connected, ", ")}")
@@ -120,7 +126,8 @@ defmodule PortholeSidecar.Cluster do
 
     for name <- names,
         name != own,
-        not String.starts_with?(name, "rem-"),
+        # Short-lived tool nodes: release remote consoles and rpc/eval calls.
+        not String.starts_with?(name, ["rem-", "rpc-"]),
         prefix == nil or String.starts_with?(name, prefix),
         do: :"#{name}@#{host}"
   end

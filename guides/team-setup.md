@@ -296,7 +296,7 @@ All variables:
 
 The sidecar refuses to start without tokens or a place to look, and it logs
 which nodes it observes, which it cannot connect to, and when it finds none.
-Remote consoles (`rem-*`) are never observed. `GET /healthz` answers `200 ok`
+Remote consoles and `rpc` calls (`rem-*`, `rpc-*` nodes) are never observed. `GET /healthz` answers `200 ok`
 for liveness checks, and `mix porthole.doctor` checks each node in detail.
 
 **Docker.** Build from the repository root:
