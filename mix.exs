@@ -56,12 +56,21 @@ defmodule Porthole.MixProject do
     [
       main: "readme",
       source_ref: "v#{@version}",
-      extras: ["README.md", "guides/use-cases.md", "guides/cookbook.md", "guides/team-setup.md"],
-      groups_for_extras: [Guides: ~r/guides\//],
+      extras: [
+        "README.md",
+        "guides/use-cases.md",
+        "guides/cookbook.md",
+        "guides/team-setup.md",
+        "evals/README.md": [title: "Evals", filename: "evals"],
+        "evals/2026-09-shop-blind.md": [title: "Eval: shop, blind (2026-09)"]
+      ],
+      groups_for_extras: [Guides: ~r/guides\//, Evals: ~r/evals\//],
       # The demo is compiled in dev (for --demo) but is not part of the package.
       filter_modules: fn module, _meta ->
         not (inspect(module) =~ ~r/^(Porthole\.Demo|Shop)(\.|$)/)
-      end
+      end,
+      # The evals mention demo modules by name; they are not API to link to.
+      skip_code_autolink_to: &(&1 =~ ~r/^(Porthole\.Demo|Shop)[.\/]/)
     ]
   end
 end
