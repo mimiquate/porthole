@@ -96,7 +96,7 @@ defmodule Porthole.MCP do
           value != nil,
           do: {key, value}
 
-    opts = Keyword.merge(context.opts, request_opts)
+    opts = context.opts |> Keyword.merge(request_opts) |> Keyword.put(:client, context.client)
     started = System.monotonic_time(:millisecond)
     outcome = Porthole.query(sql, opts)
     Audit.record(context, sql, opts, outcome, System.monotonic_time(:millisecond) - started)

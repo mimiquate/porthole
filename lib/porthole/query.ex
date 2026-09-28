@@ -26,7 +26,7 @@ defmodule Porthole.Query do
   @compile {:no_warn_undefined, Exqlite.Sqlite3}
 
   alias Exqlite.Sqlite3
-  alias Porthole.{Collector, Error, Policy, Result, Table, Term}
+  alias Porthole.{Collector, Error, Limiter, Policy, Result, Table, Term}
 
   @deny ~w(attach detach pragma insert update delete create_table drop_table create_index
            drop_index create_trigger drop_trigger create_view drop_view alter_table reindex
@@ -43,6 +43,9 @@ defmodule Porthole.Query do
     * `:nodes` - `nil` (this node), `:all` (this node and every connected
       one) or a list of node names.
     * `:policy` - the session `Porthole.Policy`.
+    * `:client` - who is asking (e.g. a token id). Identified clients are
+      subject to the policy's `:queries_per_minute`; every query is subject
+      to `:max_concurrent`. See `Porthole.Limiter`.
     * `:max_result_rows`, `:max_rows`, `:timeout_ms` - narrow the policy for
       this request.
   """
@@ -53,6 +56,10 @@ defmodule Porthole.Query do
       {result, %{sql: sql, result: result}}
     end)
   end
+
+  @doc "Whether this node can run queries (i.e. the SQLite NIF is available)."
+  @spec available?() :: boolean()
+  def available?, do: Code.ensure_loaded?(Sqlite3)
 
   defp do_run(sql, opts) do
     policy =
@@ -67,39 +74,50 @@ defmodule Porthole.Query do
     with :ok <- Policy.authorize(policy, :observe),
          :ok <- check_window(window, policy),
          {:ok, nodes} <- nodes(opts[:nodes]),
-         :ok <- Policy.authorize_nodes(policy, nodes) do
-      tables = for table <- Table.all(), sql =~ ~r/\b#{table.name()}\b/i, do: table
-      names = Enum.map(tables, & &1.name())
-
-      {collected, errors} =
-        Collector.collect(nodes, names, window, policy.max_rows, policy.timeout_ms)
-
-      with {:ok, columns, rows, more?} <- execute(sql, tables, collected, window, policy) do
-        {rows, shortened} = shorten_cells(rows)
-
-        notes =
-          List.flatten([
-            if(more?, do: "only the first #{policy.max_result_rows} rows are returned", else: []),
-            if(shortened > 0,
-              do: "#{shortened} cells were cut to #{@max_cell_bytes} bytes",
-              else: []
-            ),
-            for {node, tables} <- collected, {name, {_, true}} <- tables do
-              "#{name} on #{node}: collection stopped at #{policy.max_rows} rows, aggregates are incomplete"
-            end
-          ])
-
-        {:ok,
-         %Result{
-           columns: columns,
-           rows: rows,
-           truncated: notes != [],
-           notes: notes,
-           errors: for({node, message} <- errors, do: %{node: to_string(node), message: message}),
-           nodes: Enum.map(nodes, &to_string/1),
-           window_ms: window
-         }}
+         :ok <- Policy.authorize_nodes(policy, nodes),
+         {:ok, ticket} <- Limiter.acquire(opts[:client], policy) do
+      try do
+        run_admitted(sql, nodes, window, policy)
+      after
+        Limiter.release(ticket)
       end
+    end
+  end
+
+  defp run_admitted(sql, nodes, window, policy) do
+    tables = for table <- Table.all(), sql =~ ~r/\b#{table.name()}\b/i, do: table
+    names = Enum.map(tables, & &1.name())
+    limits = %{max_rows: policy.max_rows, max_bytes: policy.max_bytes}
+    {collected, errors} = Collector.collect(nodes, names, window, limits, policy.timeout_ms)
+
+    with {:ok, columns, rows, more?} <- execute(sql, tables, collected, window, policy) do
+      {rows, shortened} = shorten_cells(rows)
+
+      notes =
+        List.flatten([
+          if(more?, do: "only the first #{policy.max_result_rows} rows are returned", else: []),
+          if(shortened > 0,
+            do: "#{shortened} cells were cut to #{@max_cell_bytes} bytes",
+            else: []
+          ),
+          for {node, tables} <- collected, {name, {_, cut}} <- tables, cut do
+            limit =
+              if cut == :bytes, do: "#{policy.max_bytes} bytes", else: "#{policy.max_rows} rows"
+
+            "#{name} on #{node}: collection stopped at #{limit}, aggregates are incomplete"
+          end
+        ])
+
+      {:ok,
+       %Result{
+         columns: columns,
+         rows: rows,
+         truncated: notes != [],
+         notes: notes,
+         errors: for({node, message} <- errors, do: %{node: to_string(node), message: message}),
+         nodes: Enum.map(nodes, &to_string/1),
+         window_ms: window
+       }}
     end
   end
 

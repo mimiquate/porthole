@@ -60,9 +60,12 @@ when a real question needs it.
 - Redaction beyond basic `Inspect` respect (planned; don't design it out)
 - Column pruning and filter pushdown (tried and removed for simplicity; revisit only if
   collection cost shows up on large nodes, and only for the expensive items like `:binary`)
-- In-app dev endpoint, packaged sidecar (release/image), node discovery, `doctor`, rate and
-  concurrency limits, production-side guardrails (low priority, byte caps): see the roadmap
-  phases in the production-readiness discussion; next up are rate limits and guardrails
+- Phase 2 of the production roadmap: packaged sidecar (release/image), node discovery,
+  collector version check, `doctor`, deployment recipes, client snippets, in-app dev
+  endpoint. Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package
+  split, security review, real-incident evals. Phase 1 (HTTP transport, tokens, per-token
+  policy, audit, rate/concurrency limits, on-node deadlines, low priority, byte caps, CI) is
+  done
 - Crash reasons (would need a logger-fed ring buffer, i.e. state; needs a decision) and
   mailbox contents (`process_info(:messages)` copies the whole queue; risky)
 
@@ -112,9 +115,16 @@ looking, answers are exact "now", no state. History is out of scope.
   therefore runs in a low-priority worker with a deadline enforced on the observed node
   itself, and the tables leave out the collecting processes (`self()` and `$callers`).
   Never rely on the caller's timeout alone to bound work on a production node.
-- Hard caps (policy): rows collected per table per node, rows returned, query/collection
-  timeout, window length; cells are cut at 1 KB. Every cut sets `truncated` and adds a
-  human-readable entry to `notes`.
+- Hard caps (policy): rows and bytes collected per table per node, rows returned,
+  query/collection timeout, window length; cells are cut at 1 KB. Every cut sets `truncated`
+  and adds a human-readable entry to `notes` saying which limit cut it.
+- Load limits (policy, enforced by `Porthole.Limiter`): `max_concurrent` queries on the
+  querying node across all clients, and `queries_per_minute` per identified client (the
+  `:client` query option; MCP passes the token id or "stdio"; library calls without a client
+  are only concurrency-limited). Rejections are `:busy` / `:rate_limited` errors with a retry
+  hint; rejected queries don't count. The limiter monitors query processes so crashes free
+  slots, and it only starts where SQLite is available: observed nodes run no Porthole
+  processes (tested).
 - The snapshot is **not atomic**, since processes change during the walk. Document this.
 
 ### Trust boundary (important)

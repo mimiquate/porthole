@@ -16,6 +16,14 @@ defmodule Porthole.MultiNodeTest do
     %{observed: peer(paths), bare: peer(Enum.reject(paths, &(to_string(&1) =~ "porthole")))}
   end
 
+  test "observed nodes run no Porthole processes, even with the app started", %{
+    observed: observed
+  } do
+    {:ok, _} = :erpc.call(observed, Application, :ensure_all_started, [:porthole])
+    assert :erpc.call(observed, Process, :whereis, [Porthole.Limiter]) == nil
+    assert :erpc.call(observed, Supervisor, :which_children, [Porthole.Supervisor]) == []
+  end
+
   test "rows from all nodes land in one database", %{observed: observed} do
     refute :erpc.call(observed, Code, :ensure_loaded?, [Exqlite.Sqlite3])
 

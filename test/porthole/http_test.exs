@@ -7,6 +7,7 @@ defmodule Porthole.HTTPTest do
   @oncall Auth.generate()
   @limited Auth.generate()
   @no_tiers Auth.generate()
+  @one_per_minute Auth.generate()
 
   setup_all do
     {:ok, _} = Application.ensure_all_started(:inets)
@@ -14,7 +15,8 @@ defmodule Porthole.HTTPTest do
     tokens = [
       [id: "oncall", sha256: Auth.hash(@oncall)],
       [id: "limited", sha256: Auth.hash(@limited), policy: [max_result_rows: 1]],
-      [id: "no-tiers", sha256: Auth.hash(@no_tiers), policy: [tiers: []]]
+      [id: "no-tiers", sha256: Auth.hash(@no_tiers), policy: [tiers: []]],
+      [id: "one-per-minute", sha256: Auth.hash(@one_per_minute), policy: [queries_per_minute: 1]]
     ]
 
     {:ok, sup} =
@@ -85,6 +87,14 @@ defmodule Porthole.HTTPTest do
     assert %{"rows" => [_], "truncated" => true} = JSON.decode!(text)
 
     assert {true, "error (not_allowed)" <> _} = query(url, @no_tiers, "SELECT 1")
+  end
+
+  test "each client is rate limited by its token's policy", %{url: url} do
+    assert {false, _} = query(url, @one_per_minute, "SELECT 1")
+    assert {true, "error (rate_limited)" <> _} = query(url, @one_per_minute, "SELECT 1")
+
+    # Other clients are unaffected.
+    assert {false, _} = query(url, @oncall, "SELECT 1")
   end
 
   test "queries are audited with the client identity", %{url: url} do

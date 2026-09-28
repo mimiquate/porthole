@@ -27,27 +27,47 @@ defmodule Porthole.Policy do
   * `:tiers` - enabled tiers.
   * `:nodes` - nodes that may be queried, or `:all`.
   * `:max_rows` - rows collected per table, per node.
+  * `:max_bytes` - bytes collected per table, per node (rows beyond it are
+    dropped and the table is flagged as truncated).
   * `:max_result_rows` - rows returned.
   * `:max_window_ms` - longest sampling window.
   * `:timeout_ms` - budget for collecting and for running the SQL.
+  * `:queries_per_minute` - queries a client may run per minute (applies to
+    identified clients, such as agents connected through MCP).
+  * `:max_concurrent` - queries that may run at the same time on the
+    querying node, across all clients.
   """
   @type t :: %__MODULE__{
           tiers: [tier()],
           nodes: :all | [node()],
           max_rows: pos_integer(),
+          max_bytes: pos_integer(),
           max_result_rows: pos_integer(),
           max_window_ms: pos_integer(),
-          timeout_ms: pos_integer()
+          timeout_ms: pos_integer(),
+          queries_per_minute: pos_integer(),
+          max_concurrent: pos_integer()
         }
 
   defstruct tiers: [:observe],
             nodes: :all,
             max_rows: 50_000,
+            max_bytes: 10_000_000,
             max_result_rows: 500,
             max_window_ms: 60_000,
-            timeout_ms: 10_000
+            timeout_ms: 10_000,
+            queries_per_minute: 60,
+            max_concurrent: 4
 
-  @limits [:max_rows, :max_result_rows, :max_window_ms, :timeout_ms]
+  @limits [
+    :max_rows,
+    :max_bytes,
+    :max_result_rows,
+    :max_window_ms,
+    :timeout_ms,
+    :queries_per_minute,
+    :max_concurrent
+  ]
 
   @doc "All tiers, least to most powerful."
   @spec tiers() :: [tier()]

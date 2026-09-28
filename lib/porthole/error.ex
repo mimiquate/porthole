@@ -12,6 +12,8 @@ defmodule Porthole.Error do
           | :not_enabled
           | :bad_request
           | :timeout
+          | :rate_limited
+          | :busy
 
   @type t :: %__MODULE__{reason: reason(), message: String.t()}
 

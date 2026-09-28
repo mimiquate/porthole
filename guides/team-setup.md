@@ -194,11 +194,29 @@ policy and every request is intersected with it, so they can only narrow:
 ```elixir
 config :porthole, :policy,
   nodes: [:"my_app@10.0.1.12", :"my_app@10.0.1.13"],
-  max_rows: 50_000,
+  # What one query may collect and return.
+  max_rows: 50_000,          # rows per table, per node
+  max_bytes: 10_000_000,     # bytes per table, per node
   max_result_rows: 200,
   max_window_ms: 30_000,
-  timeout_ms: 10_000
+  timeout_ms: 10_000,        # collection deadline (enforced on each node) and SQL time
+  # How much load agents may put on the cluster.
+  queries_per_minute: 60,    # per client (token)
+  max_concurrent: 4          # queries running at once, across all clients
 ```
+
+The values above are the defaults. A token's `policy:` can lower any of them
+for that client, for example `queries_per_minute: 10` for a CI job.
+
+When a limit is hit, the query is not silently degraded:
+
+- **Collection limits** (`max_rows`, `max_bytes`) cut the rows and the result
+  says so in `notes`, e.g. *"processes on app@host: collection stopped at
+  10000000 bytes, aggregates are incomplete"*.
+- **Load limits** reject the query with an error the agent can act on:
+  `rate_limited` (*"60 queries per minute for this client; retry in 12s"*) or
+  `busy` (*"4 queries are already running on this node; retry in a few
+  seconds"*). Rejected queries do not count toward the rate.
 
 Only the `observe` tier is implemented. The `trace`, `evaluate` and `mutate`
 tiers are defined so policies can be written against them, and they return a
@@ -231,8 +249,20 @@ observed ones. A node on an older OTP answers with a clear error in
 Each query collects only the tables it mentions, once (twice with a window).
 Collecting `processes` calls `Process.info/2` for every process, so on a node
 with a million processes a query costs roughly what `:observer`'s process
-tab costs for one refresh. Collection is capped by `max_rows`, and a capped
-result says so in `notes`. Nothing runs between queries.
+tab costs for one refresh. Nothing runs between queries, and observed nodes
+run no Porthole processes at all.
+
+On each observed node, collection:
+
+- runs at **low priority**, so under load the application wins and Porthole
+  waits, never the other way around;
+- has a **deadline enforced on the node itself**: past `timeout_ms` (plus the
+  window) the work is stopped there, not merely abandoned by the caller
+  (Erlang's `:erpc` does not stop remote work when the caller times out);
+- is **capped** by `max_rows` and `max_bytes` per table.
+
+Across the cluster, `max_concurrent` and `queries_per_minute` bound how much
+collection agents can trigger.
 
 ## The human side
 

@@ -109,8 +109,10 @@ aggregates and subqueries, and the running system stays the source of truth.
 - **Read-only.** A SQLite authorizer denies all writes, `ATTACH`, `PRAGMA` and
   schema changes. Collectors read metadata only, never ETS contents or process
   state.
-- **Bounded.** Rows collected, rows returned, cell size, term size and query
-  time are capped. `truncated` and `notes` say what was cut.
+- **Bounded.** Rows and bytes collected, rows returned, cell size, term size
+  and query time are capped; `truncated` and `notes` say what was cut.
+  Collection runs at low priority with a deadline enforced on each node, and
+  queries are rate limited per client and capped in concurrency.
 - **Not atomic.** Processes change while a table is walked.
 - **Sidecar-friendly.** Only the querying node needs SQLite (`exqlite` is an
   optional dependency). Observed nodes need only the pure-Elixir collectors.

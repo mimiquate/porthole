@@ -13,16 +13,22 @@ defmodule Porthole.Collector do
 
   alias Porthole.Table
 
-  @type tables :: %{String.t() => {[Table.row()], truncated :: boolean()}}
+  @typedoc """
+  Rows per table, with which limit (if any) cut the collection short.
+  """
+  @type tables :: %{String.t() => {[Table.row()], truncated :: false | :rows | :bytes}}
+
+  @typedoc "Per-table, per-node collection limits."
+  @type limits :: %{max_rows: pos_integer(), max_bytes: pos_integer()}
 
   @doc """
   Collects the named tables on every node, concurrently. Failing nodes are
   returned as `{node, reason}` errors and never fail the others.
   """
-  @spec collect([node()], [String.t()], non_neg_integer() | nil, pos_integer(), timeout()) ::
+  @spec collect([node()], [String.t()], non_neg_integer() | nil, limits(), timeout()) ::
           {%{node() => tables()}, [{node(), String.t()}]}
-  def collect(nodes, names, window_ms, max_rows, timeout) do
-    args = [names, window_ms, max_rows, timeout]
+  def collect(nodes, names, window_ms, limits, timeout) do
+    args = [names, window_ms, limits, timeout]
     # Slightly longer than the on-node deadline, so nodes report their own
     # (more precise) timeout before the caller gives up on them.
     call_timeout = timeout + (window_ms || 0) + 1_000
@@ -43,8 +49,8 @@ defmodule Porthole.Collector do
   Collects the named tables on this node. With a window, tables with delta
   columns are also snapshotted at the start of the window.
   """
-  @spec collect_local([String.t()], non_neg_integer() | nil, pos_integer(), timeout()) :: tables()
-  def collect_local(names, window_ms, max_rows, timeout) do
+  @spec collect_local([String.t()], non_neg_integer() | nil, limits(), timeout()) :: tables()
+  def collect_local(names, window_ms, limits, timeout) do
     check_otp!()
     caller = self()
     budget = timeout + (window_ms || 0)
@@ -54,7 +60,7 @@ defmodule Porthole.Collector do
         Process.flag(:priority, :low)
         # Tables leave out the collecting process and its callers.
         Process.put(:"$callers", [caller])
-        send(caller, {:collected, self(), collect_tables(names, window_ms, max_rows)})
+        send(caller, {:collected, self(), collect_tables(names, window_ms, limits)})
       end)
 
     receive do
@@ -74,7 +80,7 @@ defmodule Porthole.Collector do
     end
   end
 
-  defp collect_tables(names, window_ms, max_rows) do
+  defp collect_tables(names, window_ms, %{max_rows: max_rows, max_bytes: max_bytes}) do
     tables = for name <- names, do: elem(Table.fetch(name), 1)
     sampled = if window_ms, do: Enum.filter(tables, &(&1.deltas() != [])), else: []
 
@@ -89,8 +95,22 @@ defmodule Porthole.Collector do
           do: Table.add_deltas(table, before[table], rows),
           else: rows
 
-      {table.name(), {rows, truncated}}
+      {table.name(), cap_bytes(rows, if(truncated, do: :rows, else: false), max_bytes)}
     end)
+  end
+
+  # Rows are bounded in width, but many rows can still add up. This bounds what
+  # a node sends back over distribution (and what the querying node loads).
+  defp cap_bytes(rows, truncated, max_bytes) do
+    rows
+    |> Enum.reduce_while({[], 0}, fn row, {kept, size} ->
+      size = size + :erlang.external_size(row)
+      if size > max_bytes, do: {:halt, {:cut, kept}}, else: {:cont, {[row | kept], size}}
+    end)
+    |> case do
+      {:cut, kept} -> {Enum.reverse(kept), :bytes}
+      {_kept, _size} -> {rows, truncated}
+    end
   end
 
   # Local failures are reported like remote ones instead of failing the query.
