@@ -30,17 +30,25 @@ $ mix porthole.query --connect my_app@127.0.0.1 --cookie secret --window 5000 \
     "SELECT registered_name, reductions_delta FROM processes ORDER BY 2 DESC LIMIT 10"
 ```
 
+If a node doesn't answer, `mix porthole.doctor` checks each node
+(reachable, Porthole loaded, versions, a real collection) and explains what
+to fix.
+
 From a remote shell or IEx: `Porthole.print("SELECT ...")`, or
 `Porthole.query/2` for a `Porthole.Result`.
 
 For agents, Porthole is an MCP server with one `query` tool.
 
-- **In development**, `mix porthole.mcp` serves it on stdio, next to the agent
-  (run `mix compile` first):
+- **In development**, mount it in your router and connect the agent to it:
 
-  ```json
-  {"mcpServers": {"porthole": {"command": "mix",
-    "args": ["porthole.mcp", "--connect", "my_app@localhost", "--cookie", "dev"]}}}
+  ```elixir
+  if Mix.env() == :dev do
+    forward "/porthole", Porthole.MCP.Plug, auth: :localhost
+  end
+  ```
+
+  ```console
+  $ claude mcp add --transport http porthole http://localhost:4000/porthole
   ```
 
 - **In production**, `mix porthole.server` runs a sidecar inside the cluster

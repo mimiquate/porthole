@@ -58,8 +58,27 @@ defmodule Porthole.MultiNodeTest do
   test "a node without Porthole is reported; the others answer", %{observed: observed, bare: bare} do
     result = Porthole.query!("SELECT DISTINCT node FROM applications", nodes: [observed, bare])
     assert result.rows == [[to_string(observed)]]
-    assert [%{node: node, message: "Porthole is not loaded on this node"}] = result.errors
+    assert [%{node: node, message: "Porthole is not loaded on this node" <> _}] = result.errors
     assert node == to_string(bare)
+  end
+
+  test "doctor explains what is wrong with each node", %{observed: observed, bare: bare} do
+    checks = Porthole.Doctor.check([observed, bare, :nobody@nowhere])
+
+    assert [
+             %{status: :ok, porthole: vsn, otp: otp, problems: []},
+             %{status: :error, porthole: nil, problems: [not_loaded]},
+             %{status: :error, problems: [unreachable]}
+           ] = checks
+
+    assert vsn == Porthole.Collector.version()
+    assert String.to_integer(otp) >= 27
+    assert not_loaded =~ "Porthole is not loaded"
+    assert unreachable =~ "not reachable"
+
+    report = Porthole.Doctor.format(checks)
+    assert report =~ "✓ #{observed}"
+    assert report =~ "✗ #{bare}"
   end
 
   defp peer(paths) do

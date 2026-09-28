@@ -24,17 +24,71 @@ collectors: plain Elixir, no NIFs, no processes, no configuration.
 
 ## Development
 
-The agent talks to your running dev server through an MCP server that joins
-it as a hidden node.
+In development, mount Porthole inside your app and point the agent at it. No
+named node, cookie, sidecar or token is needed.
 
-**1. Start your dev server as a named node:**
+**1. Add the dependencies for development:**
 
-```console
-$ iex --sname my_app@localhost --cookie dev -S mix phx.server
+```elixir
+{:porthole, "~> 0.1"},
+{:exqlite, "~> 0.41", only: :dev}
 ```
 
-**2. Add the MCP server to the repo**, e.g. `.mcp.json` for Claude Code (other
-MCP clients take the same command and arguments):
+**2. Mount the endpoint in your router, in development only:**
+
+```elixir
+# lib/my_app_web/router.ex
+if Mix.env() == :dev do
+  forward "/porthole", Porthole.MCP.Plug, auth: :localhost
+end
+```
+
+Put it outside any `pipe_through` (the endpoint is not a browser page).
+`auth: :localhost` accepts requests only straight from your machine: other
+addresses, proxied requests and browsers are rejected, and a warning is
+logged when the router compiles. Never enable it in production.
+
+**3. Connect the agent**, e.g. for Claude Code:
+
+```console
+$ claude mcp add --transport http porthole http://localhost:4000/porthole
+```
+
+or commit it for the whole team in `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "porthole": {"type": "http", "url": "http://localhost:4000/porthole"}
+  }
+}
+```
+
+That's it: with `mix phx.server` running, the agent has a `query` tool whose
+description includes the full schema.
+
+### Without Phoenix
+
+Serve the same plug with Bandit, in development only, e.g. in your
+application's children:
+
+```elixir
+children =
+  if Mix.env() == :dev,
+    do: [{Bandit, plug: {Porthole.MCP.Plug, auth: :localhost}, port: 4040}],
+    else: []
+```
+
+and connect the agent to `http://localhost:4040/`.
+
+### Over distribution instead
+
+To inspect a node started separately (or a non-HTTP app), start it as a named
+node and let the MCP server join it over stdio:
+
+```console
+$ iex --sname my_app@localhost --cookie dev -S mix
+```
 
 ```json
 {
@@ -47,12 +101,24 @@ MCP clients take the same command and arguments):
 }
 ```
 
-**3. Compile once before the agent starts** (`mix compile`). The MCP server
-speaks over stdout, and compiler output there would corrupt the protocol.
+Run `mix compile` before the agent starts: this MCP server speaks over
+stdout, and compiler output there would corrupt the protocol. The dev cookie
+ends up next to the agent, which is fine in development and exactly what the
+[production setup](#production) avoids.
 
-That's it. The agent now has a `query` tool whose description includes the
-full schema. To try things without your app, `mix porthole.query --demo "..."`
-runs queries against a built-in tree of misbehaving processes.
+### Checking the setup
+
+`mix porthole.doctor` checks that each node can be observed: reachable,
+Porthole loaded, same version, OTP 27+, and a real collection. It explains
+what to fix when something is off:
+
+```console
+$ mix porthole.doctor --connect my_app@localhost --cookie dev
+✓ my_app@localhost  porthole 0.1.0, OTP 29, Elixir 1.20.4, latency 0ms, collection 5ms
+```
+
+To try Porthole without an app, `mix porthole.query --demo "..."` runs
+queries against a small built-in app with planted problems.
 
 ## Tell your agent when to use it
 

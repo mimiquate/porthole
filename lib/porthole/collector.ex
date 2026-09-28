@@ -13,6 +13,15 @@ defmodule Porthole.Collector do
 
   alias Porthole.Table
 
+  @version Mix.Project.config()[:version]
+
+  @doc """
+  The version of the collector code on this node. The querying node and the
+  observed nodes should run the same one (`mix porthole.doctor` checks).
+  """
+  @spec version() :: String.t()
+  def version, do: @version
+
   @typedoc """
   Rows per table, with which limit (if any) cut the collection short.
   """
@@ -136,7 +145,8 @@ defmodule Porthole.Collector do
   defp describe({:error, {:erpc, :timeout}}), do: "collection timed out"
 
   defp describe({:error, {:exception, :undef, [{__MODULE__, _, _, _} | _]}}),
-    do: "Porthole is not loaded on this node"
+    do:
+      "Porthole is not loaded on this node, or runs an incompatible version (run mix porthole.doctor)"
 
   defp describe({:error, {:exception, exception, _stack}}) when is_exception(exception),
     do: "collection failed: " <> Porthole.Term.truncate(Exception.message(exception), 500)

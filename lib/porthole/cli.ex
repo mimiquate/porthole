@@ -60,7 +60,16 @@ defmodule Porthole.CLI do
       :net_kernel.start(:"porthole_#{System.pid()}", %{name_domain: domain, hidden: true})
 
     if cookie, do: Node.set_cookie(String.to_atom(cookie))
-    Node.connect(target) || Mix.raise("could not connect to #{target}")
+
+    Node.connect(target) ||
+      Mix.raise("""
+      could not connect to #{target}. Usual causes:
+        - the node is not running, or its name is different (check with `epmd -names` on its host)
+        - the cookie differs (--cookie must match the node's cookie)
+        - name types differ: a node started with --sname needs a short name here, --name a long one
+        - epmd (port 4369) or the node's distribution port is not reachable from here
+      """)
+
     target
   end
 
