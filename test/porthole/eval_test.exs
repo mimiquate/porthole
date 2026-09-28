@@ -3,7 +3,8 @@ defmodule Porthole.EvalTest do
   use ExUnit.Case, async: false
 
   setup_all do
-    start_supervised!(Porthole.Demo)
+    Porthole.Demo.start()
+    on_exit(&Porthole.Demo.stop/0)
     Process.sleep(200)
     :ok
   end
@@ -20,7 +21,7 @@ defmodule Porthole.EvalTest do
       ORDER BY blocked_callers DESC LIMIT 1
       """)
 
-    assert %{"registered_name" => "Porthole.Demo.SlowServer", "blocked_callers" => 10} = top
+    assert %{"registered_name" => "Shop.Pricing", "blocked_callers" => 10} = top
   end
 
   test "2. what is leaking memory, and on which node" do
@@ -30,7 +31,7 @@ defmodule Porthole.EvalTest do
         window_ms: 300
       )
 
-    assert %{"registered_name" => "Porthole.Demo.Leaker"} = top
+    assert %{"registered_name" => "Shop.Analytics"} = top
     assert top["node"] == to_string(node())
   end
 
@@ -45,14 +46,14 @@ defmodule Porthole.EvalTest do
         window_ms: 300
       )
 
-    assert top["name"] == "Porthole.Demo.FlappySupervisor"
+    assert top["name"] == "Shop.Payments.Supervisor"
 
     children =
       Porthole.query!(
-        "SELECT child_id FROM supervisors WHERE name = 'Porthole.Demo.FlappySupervisor' ORDER BY 1"
+        "SELECT child_id FROM supervisors WHERE name = 'Shop.Payments.Supervisor' ORDER BY 1"
       )
 
-    assert children.rows == [["crasher"], ["stable"]]
+    assert children.rows == [["Shop.Payments.Gateway"], ["Shop.Payments.Ledger"]]
   end
 
   test "4. largest mailboxes, grouped by what spawned them" do
@@ -61,7 +62,7 @@ defmodule Porthole.EvalTest do
         "SELECT initial_call, sum(message_queue_len) AS queued FROM processes GROUP BY 1 ORDER BY 2 DESC LIMIT 1"
       )
 
-    assert %{"initial_call" => "Porthole.Demo.Sink.init/1"} = top
+    assert %{"initial_call" => "Shop.Notifications.init/1"} = top
   end
 
   test "5. fastest-growing ETS tables over a window, and their owners" do
@@ -75,7 +76,7 @@ defmodule Porthole.EvalTest do
         window_ms: 300
       )
 
-    assert %{"name" => "porthole_demo_growing", "owner" => "Porthole.Demo.EtsGrower"} = top
+    assert %{"name" => "shop_search_index", "owner" => "Shop.Search.Indexer"} = top
   end
 
   test "6. most reductions over a window" do
@@ -84,18 +85,19 @@ defmodule Porthole.EvalTest do
         window_ms: 300
       )
 
-    assert top["registered_name"] == "Porthole.Demo.HotServer"
+    assert top["registered_name"] == "Shop.Inventory.Sync"
   end
 
   test "7. orphans: no links, no monitors, not supervised" do
     orphans =
       Porthole.query!("""
       SELECT registered_name FROM processes
-      WHERE links_count = 0 AND monitors_count = 0 AND monitored_by_count = 0
+      WHERE application = 'shop'
+        AND links_count = 0 AND monitors_count = 0 AND monitored_by_count = 0
         AND pid NOT IN (SELECT child_pid FROM supervisors WHERE child_pid IS NOT NULL)
       """)
 
-    assert ["porthole_demo_orphan"] in orphans.rows
+    assert orphans.rows == [["shop_import_watcher"]]
   end
 
   test "8. which application's processes use the most memory" do
@@ -105,7 +107,9 @@ defmodule Porthole.EvalTest do
       WHERE application IS NOT NULL GROUP BY 1 ORDER BY 2 DESC
       """)
 
-    assert ["kernel", _] = Enum.find(result.rows, &(hd(&1) == "kernel"))
+    names = Enum.map(result.rows, &hd/1)
+    assert "shop" in names
+    assert "kernel" in names
   end
 
   # Beyond the original eval set.
@@ -133,7 +137,7 @@ defmodule Porthole.EvalTest do
       GROUP BY p.pid ORDER BY sockets DESC LIMIT 1
       """)
 
-    assert %{"registered_name" => "Porthole.Demo.SocketLeaker"} = top
+    assert %{"registered_name" => "Shop.Metrics.Reporter"} = top
     assert top["sockets"] >= 10
   end
 end

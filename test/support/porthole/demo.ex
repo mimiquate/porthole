@@ -1,325 +1,361 @@
 defmodule Porthole.Demo do
   @moduledoc """
-  A small supervision tree of deliberately misbehaving processes, one per
-  eval question, for tests and for trying queries by hand:
+  A small online-shop application with deliberately planted problems, used
+  to exercise the eval set and to test agents.
 
-      iex -S mix
-      iex> Porthole.Demo.start()
-      iex> Porthole.print("SELECT registered_name, message_queue_len FROM processes ORDER BY 2 DESC LIMIT 5")
+  The processes have ordinary names, and the tree runs as a real OTP
+  application (`:shop`), so nothing visible at runtime gives the problems
+  away: an agent has to *diagnose* them. The answer key is below, and only
+  here:
 
-  | Process                   | Misbehavior                                    | Eval |
-  |---------------------------|------------------------------------------------|------|
-  | `SlowServer` + callers    | serializes slow calls; callers queue up        | 1, 4 |
-  | `Leaker`                  | accumulates data in its state forever          | 2    |
-  | `FlappySupervisor`        | its `:crasher` child exits every few ms        | 3    |
-  | `Sink` + `Flooder`        | `Sink` is stuck, its mailbox grows unbounded   | 4    |
-  | `EtsGrower`               | inserts into an ETS table forever              | 5    |
-  | `HotServer`               | busy loop burning reductions                   | 6    |
-  | orphan (`:porthole_demo_orphan`) | unlinked, unmonitored, unsupervised     | 7    |
-  | `SocketLeaker`            | opens UDP sockets and never closes them (≤ 200)| -    |
-  | `DeadlockA` / `DeadlockB` | call each other and wait forever               | -    |
+  | Process                          | Planted problem                                  | Eval |
+  |----------------------------------|--------------------------------------------------|------|
+  | `Shop.Pricing`                   | serializes slow calls; checkout workers queue up | 1, 4 |
+  | `Shop.Checkout.Worker` (×10)     | the callers stuck behind `Shop.Pricing`          | 1    |
+  | `Shop.Analytics`                 | keeps every event (and its binary) forever       | 2    |
+  | `Shop.Payments.Supervisor`       | its `Shop.Payments.Gateway` child crash-loops    | 3    |
+  | `Shop.Notifications`             | stuck; its mailbox grows without bound           | 4    |
+  | `Shop.Orders.EventRelay`         | the sender flooding `Shop.Notifications`         | 4    |
+  | `Shop.Search.Indexer`            | ETS table `shop_search_index` grows forever      | 5    |
+  | `Shop.Inventory.Sync`            | busy loop burning CPU                            | 6    |
+  | `:shop_import_watcher`           | unlinked, unmonitored, unsupervised (orphan)     | 7    |
+  | `Shop.Metrics.Reporter`          | opens UDP sockets, never closes them (≤ 200)     | -    |
+  | `Shop.Cart` / `Shop.Promotions`  | call each other: deadlocked                      | -    |
 
-  All processes are registered under their module name (so only one demo
-  tree can run at a time) and stop with the tree, except the orphan, which is
-  killed explicitly on shutdown.
+  Start it with `start/1` (e.g. `iex -S mix run -e 'Porthole.Demo.start()'`)
+  and stop it with `stop/0`. It grows without bound by design: don't leave it
+  running.
 
   ## Options
 
-    * `:callers` - clients hammering `SlowServer` (default 10).
-    * `:slow_ms` - time `SlowServer` spends per call (default 20).
-    * `:crash_ms` - lifetime of the flapping child (default 20).
-    * `:tick_ms` - interval of the flooder, leaker and ETS grower (default 10).
+    * `:checkout_workers` - clients calling `Shop.Pricing` (default 10).
+    * `:pricing_ms` - time `Shop.Pricing` spends per call (default 20).
+    * `:gateway_ms` - lifetime of the crashing gateway (default 20).
+    * `:tick_ms` - pace of the relay, analytics, indexer and reporter
+      (default 10).
   """
 
-  use Supervisor
+  @app :shop
 
-  @spec start_link(keyword()) :: Supervisor.on_start()
-  def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
-
-  @doc """
-  Starts the demo without linking it to the caller, so it keeps running after
-  the caller exits (e.g. `iex -S mix run -e 'Porthole.Demo.start()'`).
-  """
-  @spec start(keyword()) :: {:ok, pid()}
+  @doc "Loads and starts the `:shop` application (restarting it if running)."
+  @spec start(keyword()) :: :ok
   def start(opts \\ []) do
-    {:ok, pid} = start_link(opts)
-    Process.unlink(pid)
-    {:ok, pid}
+    stop()
+
+    :ok =
+      :application.load(
+        {:application, @app,
+         [
+           description: ~c"Online shop",
+           vsn: ~c"1.4.2",
+           modules: [],
+           registered: [],
+           applications: [:kernel, :stdlib, :elixir],
+           mod: {Shop.Application, opts}
+         ]}
+      )
+
+    :ok = Application.start(@app)
   end
 
+  @doc "Stops and unloads the `:shop` application."
+  @spec stop() :: :ok
+  def stop do
+    Application.stop(@app)
+    Application.unload(@app)
+    :ok
+  end
+end
+
+defmodule Shop.Application do
+  @moduledoc false
+  use Application
+
   @impl true
-  def init(opts) do
+  def start(_type, opts) do
     tick = Keyword.get(opts, :tick_ms, 10)
 
     children = [
-      {__MODULE__.SlowServer, Keyword.get(opts, :slow_ms, 20)},
-      {__MODULE__.Callers, Keyword.get(opts, :callers, 10)},
-      {__MODULE__.Leaker, tick},
-      {__MODULE__.FlappySupervisor, Keyword.get(opts, :crash_ms, 20)},
-      __MODULE__.Sink,
-      {__MODULE__.Flooder, tick},
-      {__MODULE__.EtsGrower, tick},
-      __MODULE__.HotServer,
-      __MODULE__.OrphanMaker,
-      {__MODULE__.SocketLeaker, tick},
-      # Blocked forever, so they cannot stop gracefully.
-      Supervisor.child_spec({__MODULE__.Deadlock, __MODULE__.DeadlockA},
-        id: :deadlock_a,
-        shutdown: :brutal_kill
-      ),
-      Supervisor.child_spec({__MODULE__.Deadlock, __MODULE__.DeadlockB},
-        id: :deadlock_b,
-        shutdown: :brutal_kill
-      )
+      {Shop.Pricing, Keyword.get(opts, :pricing_ms, 20)},
+      {Shop.Checkout.Supervisor, Keyword.get(opts, :checkout_workers, 10)},
+      {Shop.Analytics, tick},
+      {Shop.Payments.Supervisor, Keyword.get(opts, :gateway_ms, 20)},
+      Shop.Notifications,
+      {Shop.Orders.EventRelay, tick},
+      {Shop.Search.Indexer, tick},
+      Shop.Inventory.Sync,
+      Shop.Importer,
+      {Shop.Metrics.Reporter, tick},
+      # Deadlocked, so they cannot stop gracefully.
+      Supervisor.child_spec(Shop.Cart, shutdown: :brutal_kill),
+      Supervisor.child_spec(Shop.Promotions, shutdown: :brutal_kill)
     ]
+
+    Supervisor.start_link(children, strategy: :one_for_one, name: Shop.Supervisor)
+  end
+end
+
+defmodule Shop.Pricing do
+  @moduledoc false
+  use GenServer
+
+  def start_link(ms), do: GenServer.start_link(__MODULE__, ms, name: __MODULE__)
+  def quote(sku), do: GenServer.call(__MODULE__, {:quote, sku}, :infinity)
+
+  @impl true
+  def init(ms), do: {:ok, ms}
+
+  @impl true
+  def handle_call({:quote, _sku}, _from, ms) do
+    Process.sleep(ms)
+    {:reply, {:ok, 1999}, ms}
+  end
+end
+
+defmodule Shop.Checkout.Supervisor do
+  @moduledoc false
+  use Supervisor
+
+  def start_link(count), do: Supervisor.start_link(__MODULE__, count, name: __MODULE__)
+
+  @impl true
+  def init(count) do
+    children =
+      for i <- 1..count do
+        Supervisor.child_spec({Task, &Shop.Checkout.Worker.run/0},
+          id: {Shop.Checkout.Worker, i},
+          restart: :permanent
+        )
+      end
 
     Supervisor.init(children, strategy: :one_for_one)
   end
+end
 
-  defmodule SlowServer do
-    @moduledoc false
-    use GenServer
+defmodule Shop.Checkout.Worker do
+  @moduledoc false
+  def run do
+    Shop.Pricing.quote("sku-#{System.unique_integer([:positive])}")
+    run()
+  end
+end
 
-    def start_link(slow_ms), do: GenServer.start_link(__MODULE__, slow_ms, name: __MODULE__)
+defmodule Shop.Analytics do
+  @moduledoc false
+  use GenServer
 
-    @impl true
-    def init(slow_ms), do: {:ok, slow_ms}
+  def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
 
-    @impl true
-    def handle_call(:work, _from, slow_ms) do
-      Process.sleep(slow_ms)
-      {:reply, :ok, slow_ms}
-    end
+  @impl true
+  def init(tick) do
+    :timer.send_interval(tick, :collect)
+    {:ok, []}
   end
 
-  defmodule Callers do
-    @moduledoc false
-    # Supervises N looping clients of SlowServer.
-    use Supervisor
+  @impl true
+  def handle_info(:collect, events) do
+    {:noreply, [{Enum.to_list(1..100), :binary.copy("x", 1024)} | events]}
+  end
+end
 
-    def start_link(count), do: Supervisor.start_link(__MODULE__, count, name: __MODULE__)
+defmodule Shop.Payments.Supervisor do
+  @moduledoc false
+  use Supervisor
 
-    @impl true
-    def init(count) do
-      children =
-        for i <- 1..count do
-          Supervisor.child_spec({Task, &call_forever/0}, id: {:caller, i}, restart: :permanent)
-        end
+  def start_link(ms), do: Supervisor.start_link(__MODULE__, ms, name: __MODULE__)
 
-      Supervisor.init(children, strategy: :one_for_one)
-    end
+  @impl true
+  def init(ms) do
+    children = [
+      {Shop.Payments.Gateway, ms},
+      Supervisor.child_spec({Agent, fn -> %{} end}, id: Shop.Payments.Ledger)
+    ]
 
-    defp call_forever do
-      GenServer.call(SlowServer, :work, :infinity)
-      call_forever()
-    end
+    # High enough to crash-loop forever instead of giving up.
+    Supervisor.init(children, strategy: :one_for_one, max_restarts: 1_000_000, max_seconds: 1)
+  end
+end
+
+defmodule Shop.Payments.Gateway do
+  @moduledoc false
+  # Stops with :shutdown so the loop does not flood the logs.
+  use GenServer
+
+  def start_link(ms), do: GenServer.start_link(__MODULE__, ms)
+
+  @impl true
+  def init(ms) do
+    Process.send_after(self(), :connect, ms)
+    {:ok, nil}
   end
 
-  defmodule Leaker do
-    @moduledoc false
-    use GenServer
+  @impl true
+  def handle_info(:connect, state), do: {:stop, :shutdown, state}
+end
 
-    def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
+defmodule Shop.Notifications do
+  @moduledoc false
+  use GenServer
 
-    @impl true
-    def init(tick) do
-      :timer.send_interval(tick, :leak)
-      {:ok, []}
-    end
+  def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
-    @impl true
-    def handle_info(:leak, leaked) do
-      {:noreply, [{Enum.to_list(1..100), :binary.copy("x", 1024)} | leaked]}
-    end
-  end
+  @impl true
+  def init(nil), do: {:ok, nil, {:continue, :connect_provider}}
 
-  defmodule FlappySupervisor do
-    @moduledoc false
-    use Supervisor
-
-    def start_link(crash_ms), do: Supervisor.start_link(__MODULE__, crash_ms, name: __MODULE__)
-
-    @impl true
-    def init(crash_ms) do
-      children = [
-        Supervisor.child_spec({Porthole.Demo.Crasher, crash_ms}, id: :crasher),
-        Supervisor.child_spec({Agent, fn -> :stable end}, id: :stable)
-      ]
-
-      # A restart intensity high enough to flap forever instead of giving up.
-      Supervisor.init(children, strategy: :one_for_one, max_restarts: 1_000_000, max_seconds: 1)
+  # Waits for a provider acknowledgement that never comes.
+  @impl true
+  def handle_continue(:connect_provider, state) do
+    receive do
+      :provider_ready -> {:noreply, state}
     end
   end
+end
 
-  defmodule Crasher do
-    @moduledoc false
-    # Stops with :shutdown so the restart loop does not flood the logs.
-    use GenServer
+defmodule Shop.Orders.EventRelay do
+  @moduledoc false
+  use GenServer
 
-    def start_link(crash_ms), do: GenServer.start_link(__MODULE__, crash_ms)
+  def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
 
-    @impl true
-    def init(crash_ms) do
-      Process.send_after(self(), :crash, crash_ms)
-      {:ok, nil}
-    end
-
-    @impl true
-    def handle_info(:crash, state), do: {:stop, :shutdown, state}
+  @impl true
+  def init(tick) do
+    :timer.send_interval(tick, :relay)
+    {:ok, nil}
   end
 
-  defmodule Sink do
-    @moduledoc false
-    # Blocks forever in a callback, so its mailbox only grows.
-    use GenServer
+  @impl true
+  def handle_info(:relay, state) do
+    for i <- 1..50, do: send(Shop.Notifications, {:order_event, i})
+    {:noreply, state}
+  end
+end
 
-    def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+defmodule Shop.Search.Indexer do
+  @moduledoc false
+  use GenServer
 
-    @impl true
-    def init(nil), do: {:ok, nil, {:continue, :block}}
+  def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
 
-    @impl true
-    def handle_continue(:block, state) do
-      receive do
-        :unblock -> {:noreply, state}
-      end
-    end
+  @impl true
+  def init(tick) do
+    table = :ets.new(:shop_search_index, [:named_table, :public, :set])
+    :timer.send_interval(tick, :index)
+    {:ok, {table, 0}}
   end
 
-  defmodule Flooder do
-    @moduledoc false
-    use GenServer
+  @impl true
+  def handle_info(:index, {table, n}) do
+    :ets.insert(table, for(i <- n..(n + 99), do: {i, :document}))
+    {:noreply, {table, n + 100}}
+  end
+end
 
-    def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
+defmodule Shop.Inventory.Sync do
+  @moduledoc false
+  use GenServer
 
-    @impl true
-    def init(tick) do
-      :timer.send_interval(tick, :flood)
-      {:ok, nil}
-    end
+  def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
-    @impl true
-    def handle_info(:flood, state) do
-      for i <- 1..50, do: send(Sink, {:event, i})
-      {:noreply, state}
-    end
+  @impl true
+  def init(nil) do
+    send(self(), :sync)
+    {:ok, 0}
   end
 
-  defmodule EtsGrower do
-    @moduledoc false
-    use GenServer
+  @impl true
+  def handle_info(:sync, acc) do
+    send(self(), :sync)
+    {:noreply, rem(acc + Enum.sum(1..1_000), 1_000_000)}
+  end
+end
 
-    @table :porthole_demo_growing
+defmodule Shop.Importer do
+  @moduledoc false
+  # Spawns a watcher with no links and no monitors, outside supervision.
+  use GenServer
 
-    def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
+  def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
-    @impl true
-    def init(tick) do
-      table = :ets.new(@table, [:named_table, :public, :set])
-      :timer.send_interval(tick, :grow)
-      {:ok, {table, 0}}
-    end
+  @impl true
+  def init(nil) do
+    Process.flag(:trap_exit, true)
 
-    @impl true
-    def handle_info(:grow, {table, n}) do
-      :ets.insert(table, for(i <- n..(n + 99), do: {i, :payload}))
-      {:noreply, {table, n + 100}}
-    end
+    watcher =
+      spawn(fn ->
+        Process.register(self(), :shop_import_watcher)
+        Process.sleep(:infinity)
+      end)
+
+    {:ok, watcher}
   end
 
-  defmodule HotServer do
-    @moduledoc false
-    use GenServer
+  @impl true
+  def terminate(_reason, watcher), do: Process.exit(watcher, :kill)
+end
 
-    def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+defmodule Shop.Metrics.Reporter do
+  @moduledoc false
+  use GenServer
 
-    @impl true
-    def init(nil) do
-      send(self(), :spin)
-      {:ok, 0}
-    end
+  @max 200
 
-    @impl true
-    def handle_info(:spin, acc) do
-      send(self(), :spin)
-      {:noreply, rem(acc + Enum.sum(1..1_000), 1_000_000)}
-    end
+  def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
+
+  @impl true
+  def init(tick) do
+    :timer.send_interval(tick, :report)
+    {:ok, []}
   end
 
-  defmodule SocketLeaker do
-    @moduledoc false
-    use GenServer
+  @impl true
+  def handle_info(:report, sockets) when length(sockets) >= @max, do: {:noreply, sockets}
 
-    @max 200
+  def handle_info(:report, sockets) do
+    {:ok, socket} = :gen_udp.open(0)
+    {:noreply, [socket | sockets]}
+  end
+end
 
-    def start_link(tick), do: GenServer.start_link(__MODULE__, tick, name: __MODULE__)
+defmodule Shop.Cart do
+  @moduledoc false
+  use GenServer
 
-    @impl true
-    def init(tick) do
-      :timer.send_interval(tick, :leak)
-      {:ok, []}
-    end
+  def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
-    @impl true
-    def handle_info(:leak, sockets) when length(sockets) >= @max, do: {:noreply, sockets}
-
-    def handle_info(:leak, sockets) do
-      {:ok, socket} = :gen_udp.open(0)
-      {:noreply, [socket | sockets]}
-    end
+  @impl true
+  def init(nil) do
+    Process.send_after(self(), :refresh_discounts, 50)
+    {:ok, nil}
   end
 
-  defmodule Deadlock do
-    @moduledoc false
-    # DeadlockA calls DeadlockB, which calls DeadlockA: both wait forever.
-    use GenServer
-
-    def start_link(name), do: GenServer.start_link(__MODULE__, name, name: name)
-
-    @impl true
-    def init(name) do
-      Process.send_after(self(), :call_peer, 50)
-      {:ok, name}
-    end
-
-    @impl true
-    def handle_info(:call_peer, name) do
-      peer =
-        if name == Porthole.Demo.DeadlockA,
-          do: Porthole.Demo.DeadlockB,
-          else: Porthole.Demo.DeadlockA
-
-      GenServer.call(peer, :ping, :infinity)
-      {:noreply, name}
-    end
-
-    @impl true
-    def handle_call(:ping, _from, name), do: {:reply, :pong, name}
+  @impl true
+  def handle_info(:refresh_discounts, state) do
+    GenServer.call(Shop.Promotions, :active, :infinity)
+    {:noreply, state}
   end
 
-  defmodule OrphanMaker do
-    @moduledoc false
-    # Spawns a process with no links and no monitors, outside supervision.
-    use GenServer
+  @impl true
+  def handle_call(:contents, _from, state), do: {:reply, [], state}
+end
 
-    @name :porthole_demo_orphan
+defmodule Shop.Promotions do
+  @moduledoc false
+  use GenServer
 
-    def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
+  def start_link(_arg), do: GenServer.start_link(__MODULE__, nil, name: __MODULE__)
 
-    @impl true
-    def init(nil) do
-      Process.flag(:trap_exit, true)
-
-      orphan =
-        spawn(fn ->
-          Process.register(self(), @name)
-          Process.sleep(:infinity)
-        end)
-
-      {:ok, orphan}
-    end
-
-    @impl true
-    def terminate(_reason, orphan), do: Process.exit(orphan, :kill)
+  @impl true
+  def init(nil) do
+    Process.send_after(self(), :recompute, 50)
+    {:ok, nil}
   end
+
+  @impl true
+  def handle_info(:recompute, state) do
+    GenServer.call(Shop.Cart, :contents, :infinity)
+    {:noreply, state}
+  end
+
+  @impl true
+  def handle_call(:active, _from, state), do: {:reply, [], state}
 end

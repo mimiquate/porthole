@@ -7,7 +7,8 @@ defmodule Porthole.CLI do
       here; the target only needs Porthole's collector.
     * `--node NODE` (repeatable) / `--all-nodes` - nodes to query.
     * `--window MS` - sampling window.
-    * `--demo` - start `Porthole.Demo` first (dev only, without `--connect`).
+    * `--demo` - start `Porthole.Demo`, an app with planted problems, first
+      (dev only, without `--connect`).
   """
 
   @switches [
@@ -66,7 +67,7 @@ defmodule Porthole.CLI do
   defp start_demo do
     demo = Module.concat(Porthole, Demo)
     Code.ensure_loaded?(demo) || Mix.raise("--demo only works in dev and test")
-    {:ok, _} = demo.start_link([])
+    :ok = demo.start()
     Process.sleep(500)
   end
 end

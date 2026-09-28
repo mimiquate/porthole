@@ -208,9 +208,15 @@ All of these are answered with one query each in `test/porthole/eval_test.exs` a
   Multi-node tests use `:peer` nodes without `exqlite` on their code path, which proves
   observed nodes only need the collector.
 - `Porthole.Demo` (`test/support/porthole/demo.ex`, also compiled in dev for
-  `mix porthole.query --demo`) holds deliberately misbehaving processes, one per eval
-  question: slow serializing server, leaker, restart loop, stuck mailbox, growing ETS,
-  hot loop, orphan, socket leaker, deadlocked pair. Add one when adding an eval question.
+  `mix porthole.query --demo`) starts `:shop`, a small OTP application with planted problems,
+  one per eval question: serializing server, leak, restart loop, stuck mailbox, growing ETS,
+  hot loop, orphan, socket leak, deadlocked pair. Add one when adding an eval question.
+  Start it with `Porthole.Demo.start/1` (unlinked, so it survives `iex -S mix run -e`), stop
+  it with `stop/0`.
+- **Keep the demo blind.** Everything visible at runtime (module, registered, table and
+  application names, child ids, messages) must look like an ordinary app: no "demo",
+  "leak", "slow", "crash" or similar. The first agent eval recognized the old descriptive
+  names and read the answers off them. The answer key lives only in the moduledoc.
 - Every ```sql block in `guides/` is executed by `test/porthole/guides_test.exs` against the
   demo (`-- window_ms: N` in a block turns on sampling). When the schema changes, the guides
   must still pass. Check new guide queries return sensible rows, not just that they run.

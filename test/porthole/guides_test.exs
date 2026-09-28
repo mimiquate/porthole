@@ -7,7 +7,8 @@ defmodule Porthole.GuidesTest do
   use ExUnit.Case, async: false
 
   setup_all do
-    start_supervised!(Porthole.Demo)
+    Porthole.Demo.start()
+    on_exit(&Porthole.Demo.stop/0)
     Process.sleep(100)
     :ok
   end
