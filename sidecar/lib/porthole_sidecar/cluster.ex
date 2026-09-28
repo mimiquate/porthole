@@ -47,7 +47,8 @@ defmodule PortholeSidecar.Cluster do
 
   @impl true
   def init(config),
-    do: {:ok, %{config: config, nodes: [], warned_empty: false}, {:continue, :refresh}}
+    do:
+      {:ok, %{config: config, nodes: [], missing: [], warned_empty: false}, {:continue, :refresh}}
 
   @impl true
   def handle_continue(:refresh, state), do: {:noreply, refresh(state)}
@@ -58,20 +59,28 @@ defmodule PortholeSidecar.Cluster do
   @impl true
   def handle_call(:nodes, _from, state), do: {:reply, state.nodes, state}
 
+  # Logs whenever what the sidecar observes, or fails to reach, changes: not
+  # every 5 seconds, but never silently either.
   defp refresh(state) do
     Process.send_after(self(), :refresh, @interval)
     targets = targets(state.config)
     connected = Enum.filter(targets, &(&1 in Node.list(:connected) or Node.connect(&1) == true))
+    missing = targets -- connected
 
-    if connected != state.nodes do
+    if connected != state.nodes and connected != [] do
       Logger.info("Porthole sidecar observing: #{Enum.join(connected, ", ")}")
-      missing = targets -- connected
-
-      if missing != [],
-        do: Logger.warning("Porthole sidecar cannot connect to: #{Enum.join(missing, ", ")}")
     end
 
-    # Say it once, not every 5 seconds.
+    # Erlang gives no reason for a refused connection, and a cookie that
+    # differs from the app's is by far the most common one.
+    if missing != state.missing and missing != [] do
+      Logger.warning(
+        "Porthole sidecar cannot connect to: #{Enum.join(missing, ", ")}. " <>
+          "Check that RELEASE_COOKIE is the same secret as the app's, and that the node's " <>
+          "distribution port is reachable (mix porthole.doctor explains more)"
+      )
+    end
+
     if targets == [] and not state.warned_empty do
       Logger.warning(
         "Porthole sidecar found no nodes to observe: check DNS_CLUSTER_QUERY / PORTHOLE_NODES, " <>
@@ -79,7 +88,7 @@ defmodule PortholeSidecar.Cluster do
       )
     end
 
-    %{state | nodes: connected, warned_empty: targets == []}
+    %{state | nodes: connected, missing: missing, warned_empty: targets == []}
   end
 
   # The system resolver (hosts file and DNS). IPv4 if any, otherwise IPv6.

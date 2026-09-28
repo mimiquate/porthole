@@ -162,16 +162,52 @@ Agent ──HTTPS + token──▶ sidecar (holds the cookie) ──distribution
 ```
 
 Production nodes only need the `porthole` dependency in their release. The
-sidecar is a project that depends on `porthole`, `exqlite`, `plug` and
-`bandit`, deployed inside the cluster's private network.
+sidecar is deployed separately, inside the cluster's private network, so it
+keeps working when the app is struggling (which is when you need it) and
+the app carries no extra NIF, port or process.
 
-### 1. Create a token per client
+Setting it up for the first time takes six steps, in this order.
+
+### 1. Give your app a fixed cookie
+
+The sidecar joins your cluster with the same cookie as your app, so the
+cookie has to be a value you control. **If your app does not set one, `mix
+release` generates a random cookie at build time**: your servers share it
+(they come from the same build), but it changes on every deploy and nothing
+outside the build knows it.
+
+To check: if your app's cookie comes from a `RELEASE_COOKIE` secret (or a
+fixed `cookie:` in the release config), it is fixed; otherwise it is
+generated. In a remote console, `Node.get_cookie()` shows the current value.
+
+To fix it, generate a value once and store it as a secret that both the app
+and the sidecar receive as `RELEASE_COOKIE`:
+
+```console
+$ mix phx.gen.secret 32      # or: openssl rand -base64 32
+```
+
+For example `fly secrets set RELEASE_COOKIE=...` on Fly.io, or a Kubernetes
+Secret mounted as an environment variable in both Deployments. Many teams
+already do this so that clustering survives rolling deploys, when servers
+from two builds run side by side.
+
+### 2. Add Porthole to your app
+
+Add `{:porthole, "~> 0.1"}` to your app's dependencies and deploy. It adds no
+processes, configuration or native code to your servers; it makes the
+read-only collectors available to the sidecar.
+
+### 3. Create a token per client
 
 Each agent, team or person gets its own token, so the audit log says who
 asked and each can be revoked on its own:
 
+No server is needed for this: tokens are generated on your machine, in your
+app's repository (the task comes with the dependency).
+
 ```console
-$ mix porthole.gen.token oncall --url https://porthole.internal:4040/
+$ mix porthole.gen.token oncall
 Token for oncall (give this to the client; it is shown only once):
 
     ph_EXAMPLE-not-a-real-token
@@ -186,9 +222,10 @@ or, for the sidecar, in PORTHOLE_TOKENS (comma separated):
 
     PORTHOLE_TOKENS=oncall:fd07d512979f51c4...
 
-Connect an agent, e.g. Claude Code:
+Connect an agent, e.g. Claude Code (the URL is known once the sidecar is
+reachable, see step 5):
 
-    claude mcp add --transport http porthole https://porthole.internal:4040/ --header "Authorization: Bearer ph_EXAMPLE-not-a-real-token"
+    claude mcp add --transport http porthole <SIDECAR_URL> --header "Authorization: Bearer ph_EXAMPLE-not-a-real-token"
 ```
 
 Only the hash goes in the server's configuration. A token can carry a policy
@@ -205,7 +242,7 @@ config :porthole, :tokens, [
 
 Removing an entry revokes the token.
 
-### 2. Run the sidecar
+### 4. Run the sidecar
 
 The sidecar is a small application in [`sidecar/`](https://github.com/mimiquate/porthole/tree/main/sidecar),
 configured entirely by environment variables and shipped as a release or a
@@ -223,8 +260,8 @@ already have:
 
 | Variable | Where it comes from |
 |---|---|
-| `RELEASE_COOKIE` | Your app's cookie |
-| `PORTHOLE_TOKENS` | `mix porthole.gen.token` (step 1) |
+| `RELEASE_COOKIE` | The same secret as your app (step 1) |
+| `PORTHOLE_TOKENS` | `mix porthole.gen.token` (step 3) |
 | `DNS_CLUSTER_QUERY` | The same value your app clusters with (Phoenix apps have it, e.g. `my-app.internal` on Fly.io or the headless Service name on Kubernetes) |
 
 ```console
@@ -301,18 +338,36 @@ listens on `127.0.0.1` unless told otherwise, and serves HTTPS with
 (ingress, load balancer): tokens must not travel in clear text outside a
 trusted network.
 
-### 3. Connect the agent
+### 5. Make the sidecar reachable for agents
 
-`mix porthole.gen.token oncall --url https://porthole.internal:4040/` prints
-the exact command, e.g. for Claude Code:
+The agent's machine must reach the sidecar's port (4040 by default). How is
+up to you; the address you end up with is the sidecar URL:
+
+| How | Sidecar URL |
+|---|---|
+| Nothing exposed: each person opens a tunnel when needed, e.g. `kubectl port-forward deploy/porthole 4040:4040` or `fly proxy 4040:4040 -a my-porthole` | `http://localhost:4040/` |
+| An internal hostname behind your load balancer or ingress, over VPN or the office network | `https://porthole.mycompany.internal/` |
+| A private network address | `https://10.0.1.50:4040/` |
+
+Tunnels are the simplest start: nothing is exposed and the traffic is
+encrypted by the tunnel. Avoid exposing the sidecar on the public internet;
+it is authenticated, but the safest sidecar is one only your network can
+reach. Anywhere outside a trusted network, use HTTPS (tokens are bearer
+credentials).
+
+### 6. Connect the agent
+
+With the token from step 3 and the URL from step 5, e.g. for Claude Code:
 
 ```console
-$ claude mcp add --transport http porthole https://porthole.internal:4040/ \
+$ claude mcp add --transport http porthole http://localhost:4040/ \
     --header "Authorization: Bearer ph_EXAMPLE-not-a-real-token"
 ```
 
-Other MCP clients that support the Streamable HTTP transport with custom
-headers take the same URL and header.
+For people added later, when the URL is known, `mix porthole.gen.token ana
+--url <SIDECAR_URL>` prints this command ready to paste. Other MCP clients
+that support the Streamable HTTP transport with custom headers take the same
+URL and header.
 
 ### Understand the trust boundary
 

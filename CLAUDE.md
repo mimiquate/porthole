@@ -113,6 +113,15 @@ looking, answers are exact "now", no state. History is out of scope.
 - Only the querying node needs `exqlite`. Other nodes need only the pure-Elixir collector.
 - **Sidecar deployment:** the query layer can run on a separate node that joins the cluster,
   so production nodes carry no NIF. Keep the collector free of NIF deps to preserve this.
+- **Decision (2026-09-28): production means a separate sidecar, with a fixed cookie.**
+  Running Porthole embedded in the app (plug in the prod router) was considered and set aside:
+  it avoids cookie handling, but an overloaded or down app takes Porthole with it (exactly
+  when it is needed) and it puts a NIF and a port on production nodes. The cost of the
+  sidecar is that the app must use a fixed cookie shared as a secret (`RELEASE_COOKIE`), since
+  `mix release` otherwise generates one per build. The team-setup guide makes this step 1 of
+  the production setup; don't document the sidecar as if teams already had a shared cookie.
+  The sidecar finds nodes by *where* the app runs (DNS / hosts + epmd names), never by
+  requiring node names up front.
 
 ### Cost controls (important)
 

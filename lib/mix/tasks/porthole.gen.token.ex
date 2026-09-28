@@ -23,7 +23,7 @@ defmodule Mix.Tasks.Porthole.Gen.Token do
   @impl true
   def run(args) do
     case OptionParser.parse(args, strict: [url: :string]) do
-      {opts, [id], []} -> generate(id, opts[:url] || "https://porthole.example:4040/")
+      {opts, [id], []} -> generate(id, opts[:url])
       _ -> Mix.raise("usage: mix porthole.gen.token CLIENT_ID [--url URL]")
     end
   end
@@ -31,6 +31,15 @@ defmodule Mix.Tasks.Porthole.Gen.Token do
   defp generate(id, url) do
     token = Porthole.Auth.generate()
     hash = Porthole.Auth.hash(token)
+
+    # On a first setup the sidecar is not running yet, so its URL is unknown.
+    {shown_url, url_note} =
+      if url,
+        do: {url, ""},
+        else:
+          {"<SIDECAR_URL>",
+           "\n    <SIDECAR_URL> is where the agent reaches the sidecar once it runs, e.g.\n" <>
+             "    http://localhost:4040/ through a tunnel. Pass --url to fill it in.\n"}
 
     Mix.shell().info("""
     Token for #{id} (give this to the client; it is shown only once):
@@ -49,8 +58,8 @@ defmodule Mix.Tasks.Porthole.Gen.Token do
 
     Connect an agent, e.g. Claude Code:
 
-        claude mcp add --transport http porthole #{url} --header "Authorization: Bearer #{token}"
-
+        claude mcp add --transport http porthole #{shown_url} --header "Authorization: Bearer #{token}"
+    #{url_note}
     Optionally narrow what this client sees with a policy (config file only):
 
         [id: #{inspect(id)}, sha256: "...", policy: [nodes: [:"my_app@10.0.1.12"], queries_per_minute: 10]]
