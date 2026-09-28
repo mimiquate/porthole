@@ -7,7 +7,7 @@ defmodule Porthole.CLI do
       here; the target only needs Porthole's collector.
     * `--node NODE` (repeatable) / `--all-nodes` - nodes to query.
     * `--window MS` - sampling window.
-    * `--demo` - start `Porthole.Demo`, an app with planted problems, first
+    * `--demo` - start the demo app (a small shop with planted problems) first
       (dev only, without `--connect`).
   """
 

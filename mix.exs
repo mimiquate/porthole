@@ -57,7 +57,11 @@ defmodule Porthole.MixProject do
       main: "readme",
       source_ref: "v#{@version}",
       extras: ["README.md", "guides/use-cases.md", "guides/cookbook.md", "guides/team-setup.md"],
-      groups_for_extras: [Guides: ~r/guides\//]
+      groups_for_extras: [Guides: ~r/guides\//],
+      # The demo is compiled in dev (for --demo) but is not part of the package.
+      filter_modules: fn module, _meta ->
+        not (inspect(module) =~ ~r/^(Porthole\.Demo|Shop)(\.|$)/)
+      end
     ]
   end
 end

@@ -121,4 +121,4 @@ $ mix test   # includes multi-node tests using :peer
 ```
 
 `test/porthole/eval_test.exs` answers each eval question with one query
-against `Porthole.Demo`.
+against the demo app (a small shop with planted problems, in `test/support`).
