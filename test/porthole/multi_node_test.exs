@@ -25,6 +25,17 @@ defmodule Porthole.MultiNodeTest do
     assert Enum.sort(result.rows) == Enum.sort([[to_string(node())], [to_string(observed)]])
   end
 
+  test "the collector does not report itself", %{observed: observed} do
+    result =
+      Porthole.query!(
+        "SELECT count(*) FROM processes WHERE initial_call = ':erpc.execute_call/4'",
+        nodes: [observed],
+        window_ms: 50
+      )
+
+    assert result.rows == [[0]]
+  end
+
   test "sampling works on remote nodes", %{observed: observed} do
     result =
       Porthole.query!("SELECT max(reductions_delta) FROM processes",

@@ -15,6 +15,11 @@ defmodule Porthole.QueryTest do
     refute result.truncated
   end
 
+  test "the collecting process is left out" do
+    assert Porthole.query!("SELECT count(*) FROM processes WHERE pid = '#{inspect(self())}'").rows ==
+             [[0]]
+  end
+
   test "writes are denied by SQLite itself" do
     for sql <- [
           "DELETE FROM processes",
@@ -82,6 +87,25 @@ defmodule Porthole.QueryTest do
     assert [[cell]] = result.rows
     assert byte_size(cell) <= 1_024
     assert result.notes == ["1 cells were cut to 1024 bytes"]
+  end
+
+  test "slow collections are stopped on the node, not just abandoned" do
+    # Claims to be a supervisor but never answers which_children (1s timeout).
+    stuck =
+      spawn(fn ->
+        Process.put(:"$initial_call", {:supervisor, StuckSup, 1})
+        Process.sleep(:infinity)
+      end)
+
+    Process.sleep(10)
+    assert {:ok, result} = Porthole.query("SELECT count(*) FROM supervisors", timeout_ms: 200)
+    assert [%{message: message}] = result.errors
+    assert message =~ "took longer than 200ms and was stopped on this node"
+
+    # The worker that was calling the stuck supervisor is gone.
+    Process.sleep(50)
+    assert {:monitored_by, []} = Process.info(stuck, :monitored_by)
+    Process.exit(stuck, :kill)
   end
 
   test "runaway queries are cancelled" do

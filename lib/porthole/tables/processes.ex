@@ -69,7 +69,10 @@ defmodule Porthole.Tables.Processes do
   @impl true
   def collect(max_rows) do
     applications = application_masters()
-    {pids, truncated} = Table.take(Process.list(), max_rows)
+    # Leave out the processes doing the collection: they would otherwise
+    # report their own work (e.g. as the top reductions_delta on a quiet node).
+    collectors = [self() | Process.get(:"$callers", [])]
+    {pids, truncated} = Table.take(Process.list() -- collectors, max_rows)
 
     rows =
       for pid <- pids, info = Process.info(pid, @items), info != nil do

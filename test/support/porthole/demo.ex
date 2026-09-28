@@ -4,7 +4,7 @@ defmodule Porthole.Demo do
   eval question, for tests and for trying queries by hand:
 
       iex -S mix
-      iex> Porthole.Demo.start_link()
+      iex> Porthole.Demo.start()
       iex> Porthole.print("SELECT registered_name, message_queue_len FROM processes ORDER BY 2 DESC LIMIT 5")
 
   | Process                   | Misbehavior                                    | Eval |
@@ -35,6 +35,17 @@ defmodule Porthole.Demo do
 
   @spec start_link(keyword()) :: Supervisor.on_start()
   def start_link(opts \\ []), do: Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
+
+  @doc """
+  Starts the demo without linking it to the caller, so it keeps running after
+  the caller exits (e.g. `iex -S mix run -e 'Porthole.Demo.start()'`).
+  """
+  @spec start(keyword()) :: {:ok, pid()}
+  def start(opts \\ []) do
+    {:ok, pid} = start_link(opts)
+    Process.unlink(pid)
+    {:ok, pid}
+  end
 
   @impl true
   def init(opts) do

@@ -108,6 +108,10 @@ looking, answers are exact "now", no state. History is out of scope.
 - Collect only the referenced tables. `Process.info/2` uses an explicit item list, and
   process dictionary entries are read key by key (`{:dictionary, key}`), never whole.
 - Nothing runs between queries.
+- `:erpc` does **not** stop remote work when the caller times out (verified). Collection
+  therefore runs in a low-priority worker with a deadline enforced on the observed node
+  itself, and the tables leave out the collecting processes (`self()` and `$callers`).
+  Never rely on the caller's timeout alone to bound work on a production node.
 - Hard caps (policy): rows collected per table per node, rows returned, query/collection
   timeout, window length; cells are cut at 1 KB. Every cut sets `truncated` and adds a
   human-readable entry to `notes`.
