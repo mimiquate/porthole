@@ -40,11 +40,17 @@ node's name and cookie (so it can use Erlang distribution: a remote console,
 
 Before each run, restart the demo so both start from the same state
 (`Porthole.Demo.start()` in the target's iex restarts it), then start a fresh
-agent session in an empty directory:
+agent session in an empty directory **outside this repository** (an agent
+that is waiting on something will browse the files around it):
 
 ```console
-$ mkdir -p /tmp/eval && cd /tmp/eval && claude
+$ mkdir -p ~/porthole-eval && cd ~/porthole-eval && claude
 ```
+
+Register the MCP server in that directory (`claude mcp add` is per
+directory by default), and allow the tool up front (`/permissions`, allow
+`mcp__porthole__query`): Claude Code's auto-mode check intermittently
+failed on it during our runs, and a read-only tool does not need it.
 
 ### Prompt
 
@@ -78,3 +84,4 @@ design.
 | Eval | Date | Porthole | Baseline |
 |---|---|---|---|
 | [Shop, blind](2026-09-shop-blind.md) | 2026-09-28 | 9/9 found, 11 queries, ~1 min, no changes to the node | 7/9 found, 1 wrong claim, ~2 min, copied a whole mailbox and table, ran app code, enabled tracing |
+| [Shop, two nodes, Docker sidecar](2026-09-shop-docker-multinode.md) | 2026-09-28 | 8/9 found (missed the orphan), 16 queries, ~1.5 min, both nodes covered without being told | not run |

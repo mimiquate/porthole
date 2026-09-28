@@ -146,6 +146,15 @@ instead of guessing about runtime state.
   takes them.
 ```
 
+**Pre-approve the tool.** It is read-only, so asking for permission on every
+query only adds friction, and in our runs Claude Code's auto-mode check
+intermittently failed on it. Allow it for the whole team in the project's
+`.claude/settings.json` (use the name you registered the server under):
+
+```json
+{"permissions": {"allow": ["mcp__porthole__query"]}}
+```
+
 Add team-specific knowledge too: the names of your critical processes and
 tables, what "normal" looks like (e.g. "the pool has 10 connections per node,
 mailboxes above 100 are unusual"), and links to your runbooks.

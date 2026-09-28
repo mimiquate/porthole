@@ -62,7 +62,10 @@ defmodule Porthole.MixProject do
         "guides/cookbook.md",
         "guides/team-setup.md",
         "evals/README.md": [title: "Evals", filename: "evals"],
-        "evals/2026-09-shop-blind.md": [title: "Eval: shop, blind (2026-09)"]
+        "evals/2026-09-shop-blind.md": [title: "Eval: shop, blind (2026-09)"],
+        "evals/2026-09-shop-docker-multinode.md": [
+          title: "Eval: two nodes, Docker sidecar (2026-09)"
+        ]
       ],
       groups_for_extras: [Guides: ~r/guides\//, Evals: ~r/evals\//],
       # The demo is compiled in dev (for --demo) but is not part of the package.
