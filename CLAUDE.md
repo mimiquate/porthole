@@ -70,7 +70,12 @@ when a real question needs it.
 - Column pruning and filter pushdown (tried and removed for simplicity; revisit only if
   collection cost shows up on large nodes, and only for the expensive items like `:binary`)
 - Phase 2 of the production roadmap, remaining: a real Kubernetes deployment and Fly.io
-  (IPv6, `fly proxy`) are untested (the guide says so), more client snippets, and a
+  (`fly proxy`, Fly's DNS) are untested (the guide says so); IPv6 distribution itself is
+  verified locally (2026-09-30: node named with an uncompressed IPv6 address, found via
+  host and via DNS). IPv6 lessons: pass parsed addresses to `:erl_epmd.names/1` (an IPv6
+  string is taken for a hostname and fails with nxdomain), try both compressed and
+  uncompressed spellings of IPv6 node names, and prefer the DNS address family of the
+  sidecar's own distribution; more client snippets, and a
   versioned sidecar-to-node protocol so sidecar and app can be upgraded independently
   (for now: upgrade both together; a mismatch is a clear per-node error). The Docker image is
   verified (2026-09-28): compose with an app on long names and a fixed cookie, discovery
