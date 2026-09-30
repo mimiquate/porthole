@@ -37,9 +37,12 @@ defmodule Porthole.MixProject do
       # Only the querying node needs the SQLite NIF. Nodes that are merely
       # observed only need the pure-Elixir collectors, so this is optional.
       {:exqlite, "~> 0.41", optional: true},
-      # Only the sidecar serving MCP over HTTP needs a web server.
-      {:plug, "~> 1.20", optional: true},
-      {:bandit, "~> 1.12", optional: true},
+      # Only the sidecar serving MCP over HTTP needs a web server. The ranges are
+      # deliberately wide: apps that already use Plug or Bandit must not be
+      # forced to upgrade them to add Porthole (tested with plug 1.19.1 and
+      # bandit 1.8.0, as well as the locked versions).
+      {:plug, "~> 1.19", optional: true},
+      {:bandit, "~> 1.8", optional: true},
       {:telemetry, "~> 1.3"},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false}
     ]
