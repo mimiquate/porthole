@@ -1,26 +1,24 @@
 defmodule Porthole.Collector do
   @moduledoc """
-  Collects tables on one or many nodes. Pure Elixir, no NIFs: this is what
-  observed nodes run, through `:erpc.multicall/5`.
+  Collects tables on one or many nodes.
 
-  On each node the work runs in a separate, low-priority process with a
-  deadline enforced *on that node*: `:erpc` does not stop remote work when
-  the caller times out, so without this a slow collection on an overloaded
-  node would keep running after the query gave up, and every retry would add
-  another one. Low priority means that under load the application wins and
+  Observed nodes need no Porthole code. For each table, its
+  `Porthole.Gather` function reads the raw data on the node: by evaluation
+  on other nodes (`Porthole.Remote`), or by a direct call on this one. The
+  raw data is then shaped into rows here, where the query runs.
+
+  Every collection runs in a separate, low-priority process with a deadline
+  enforced *on the observed node* (`Porthole.Gather.with_deadline/3`):
+  `:erpc` does not stop remote work when the caller times out, so without
+  this a slow collection on an overloaded node would keep running after the
+  query gave up. Low priority means that under load the application wins and
   Porthole waits (or gives up), never the other way around.
+
+  With a sampling window, tables with delta columns are read twice, the
+  window apart, on all nodes in parallel; the deltas are computed here.
   """
 
-  alias Porthole.Table
-
-  @version Mix.Project.config()[:version]
-
-  @doc """
-  The version of the collector code on this node. The querying node and the
-  observed nodes should run the same one (`mix porthole.doctor` checks).
-  """
-  @spec version() :: String.t()
-  def version, do: @version
+  alias Porthole.{Gather, Remote, Table}
 
   @typedoc """
   Rows per table, with which limit (if any) cut the collection short.
@@ -30,6 +28,9 @@ defmodule Porthole.Collector do
   @typedoc "Per-table, per-node collection limits."
   @type limits :: %{max_rows: pos_integer(), max_bytes: pos_integer()}
 
+  # How long a supervisor may take to answer which_children.
+  @call_timeout 1_000
+
   @doc """
   Collects the named tables on every node, concurrently. Failing nodes are
   returned as `{node, reason}` errors and never fail the others.
@@ -37,79 +38,78 @@ defmodule Porthole.Collector do
   @spec collect([node()], [String.t()], non_neg_integer() | nil, limits(), timeout()) ::
           {%{node() => tables()}, [{node(), String.t()}]}
   def collect(nodes, names, window_ms, limits, timeout) do
-    args = [names, window_ms, limits, timeout]
-    # Slightly longer than the on-node deadline, so nodes report their own
-    # (more precise) timeout before the caller gives up on them.
-    call_timeout = timeout + (window_ms || 0) + 1_000
+    tables = for name <- names, do: elem(Table.fetch(name), 1)
+    collect_node = &collect_node(&1, tables, window_ms, limits, timeout)
 
-    results =
-      if nodes == [node()],
-        do: [local(args)],
-        else: :erpc.multicall(nodes, __MODULE__, :collect_local, args, call_timeout)
+    # Other nodes in tasks; this node in the calling process, so the process
+    # running the query is among the collecting processes it leaves out.
+    {local, remote} = Enum.split_with(nodes, &(&1 == node()))
+    tasks = for node <- remote, do: {node, Task.async(fn -> collect_node.(node) end)}
+    local_results = for node <- local, do: {node, collect_node.(node)}
 
-    Enum.zip(nodes, results)
-    |> Enum.reduce({%{}, []}, fn
-      {node, {:ok, tables}}, {ok, errors} -> {Map.put(ok, node, tables), errors}
-      {node, error}, {ok, errors} -> {ok, errors ++ [{node, describe(error)}]}
+    remote_results =
+      for {node, task} <- tasks do
+        # The node enforces each deadline itself; this is only a backstop.
+        case Task.yield(task, 2 * timeout + (window_ms || 0) + 2_000) ||
+               Task.shutdown(task, :brutal_kill) do
+          {:ok, result} -> {node, result}
+          _ -> {node, {:error, :caller_timeout}}
+        end
+      end
+
+    Enum.reduce(local_results ++ remote_results, {%{}, []}, fn
+      {node, {:ok, tables}}, {ok, errors} ->
+        {Map.put(ok, node, tables), errors}
+
+      {node, {:error, reason}}, {ok, errors} ->
+        {ok, errors ++ [{node, describe(reason, timeout)}]}
     end)
   end
 
-  @doc """
-  Collects the named tables on this node. With a window, tables with delta
-  columns are also snapshotted at the start of the window.
-  """
-  @spec collect_local([String.t()], non_neg_integer() | nil, limits(), timeout()) :: tables()
-  def collect_local(names, window_ms, limits, timeout) do
-    check_otp!()
-    caller = self()
-    budget = timeout + (window_ms || 0)
+  defp collect_node(node, tables, window_ms, limits, timeout) do
+    sampled = if window_ms, do: Enum.filter(tables, &(&1.deltas() != [])), else: []
 
-    {worker, ref} =
-      spawn_monitor(fn ->
-        Process.flag(:priority, :low)
-        # Tables leave out the collecting process and its callers.
-        Process.put(:"$callers", [caller])
-        send(caller, {:collected, self(), collect_tables(names, window_ms, limits)})
-      end)
+    with {:ok, before} <- snapshot(node, sampled, limits, timeout),
+         :ok <- if(sampled != [], do: Process.sleep(window_ms), else: :ok),
+         {:ok, now} <- snapshot(node, tables, limits, timeout) do
+      {:ok,
+       Map.new(tables, fn table ->
+         {rows, truncated} = now[table]
 
-    receive do
-      {:collected, ^worker, tables} ->
-        Process.demonitor(ref, [:flush])
-        tables
+         rows =
+           if Map.has_key?(before, table),
+             do: Table.add_deltas(table, elem(before[table], 0), rows),
+             else: rows
 
-      {:DOWN, ^ref, :process, ^worker, reason} ->
-        exit(reason)
-    after
-      budget ->
-        Process.exit(worker, :kill)
-        Process.demonitor(ref, [:flush])
-
-        raise "collection took longer than #{budget}ms and was stopped on this node; " <>
-                "the node may be overloaded, retry later or with a shorter window"
+         {table.name(), cap_bytes(rows, if(truncated, do: :rows, else: false), limits.max_bytes)}
+       end)}
     end
   end
 
-  defp collect_tables(names, window_ms, %{max_rows: max_rows, max_bytes: max_bytes}) do
-    tables = for name <- names, do: elem(Table.fetch(name), 1)
-    sampled = if window_ms, do: Enum.filter(tables, &(&1.deltas() != [])), else: []
+  # Reads each table on `node` once, and shapes it here.
+  defp snapshot(node, tables, limits, timeout) do
+    gather_limits = %{max_rows: limits.max_rows, call_timeout: @call_timeout}
 
-    before = Map.new(sampled, fn table -> {table, elem(table.collect(max_rows), 0)} end)
-    if sampled != [], do: Process.sleep(window_ms)
+    Enum.reduce_while(tables, {:ok, %{}}, fn table, {:ok, acc} ->
+      {name, args} = table.gather(gather_limits)
 
-    Map.new(tables, fn table ->
-      {rows, truncated} = table.collect(max_rows)
-
-      rows =
-        if Map.has_key?(before, table),
-          do: Table.add_deltas(table, before[table], rows),
-          else: rows
-
-      {table.name(), cap_bytes(rows, if(truncated, do: :rows, else: false), max_bytes)}
+      case gather(node, name, args, timeout) do
+        {:ok, raw} -> {:cont, {:ok, Map.put(acc, table, table.shape(raw))}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
     end)
   end
 
+  defp gather(node, name, args, budget) do
+    if node == node() do
+      Gather.with_deadline(Function.capture(Gather, name, length(args) + 1), args, budget)
+    else
+      Remote.run(node, name, args, budget)
+    end
+  end
+
   # Rows are bounded in width, but many rows can still add up. This bounds what
-  # a node sends back over distribution (and what the querying node loads).
+  # the querying node loads.
   defp cap_bytes(rows, truncated, max_bytes) do
     rows
     |> Enum.reduce_while({[], 0}, fn row, {kept, size} ->
@@ -122,34 +122,21 @@ defmodule Porthole.Collector do
     end
   end
 
-  # Local failures are reported like remote ones instead of failing the query.
-  defp local(args) do
-    {:ok, apply(__MODULE__, :collect_local, args)}
-  rescue
-    exception -> {:error, {:exception, exception, __STACKTRACE__}}
-  end
-
-  # Collectors read single process dictionary keys with Process.info/2, which
-  # older releases reject. Checked per query (never at boot) so an old node
-  # reports an error instead of crashing its host application.
-  @min_otp 27
-
-  defp check_otp! do
-    release = :erlang.system_info(:otp_release) |> List.to_integer()
-
-    if release < @min_otp,
-      do: raise("Porthole needs OTP #{@min_otp}+, this node runs OTP #{release}")
-  end
-
-  defp describe({:error, {:erpc, :noconnection}}), do: "node is not reachable"
-  defp describe({:error, {:erpc, :timeout}}), do: "collection timed out"
-
-  defp describe({:error, {:exception, :undef, [{__MODULE__, _, _, _} | _]}}),
+  defp describe(:timeout, timeout),
     do:
-      "Porthole is not loaded on this node, or runs an incompatible version (run mix porthole.doctor)"
+      "collection took longer than #{timeout}ms and was stopped on this node; " <>
+        "the node may be overloaded, retry later or with a shorter window"
 
-  defp describe({:error, {:exception, exception, _stack}}) when is_exception(exception),
-    do: "collection failed: " <> Porthole.Term.truncate(Exception.message(exception), 500)
+  defp describe(:caller_timeout, _timeout), do: "collection timed out"
 
-  defp describe(other), do: "collection failed: " <> Porthole.Term.render(other)
+  defp describe({:old_otp, release}, _),
+    do: "Porthole needs OTP 27+, this node runs OTP #{release}"
+
+  defp describe({:undef, [{Enum, _fun, _args, _location} | _]}, _),
+    do: "this node does not run Elixir (Porthole observes Elixir applications)"
+
+  defp describe({:error, {:erpc, :noconnection}}, _), do: "node is not reachable"
+  defp describe({:error, {:erpc, :timeout}}, _), do: "collection timed out"
+
+  defp describe(other, _), do: "collection failed: " <> Porthole.Term.render(other)
 end

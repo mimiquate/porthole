@@ -4,6 +4,10 @@ A deployable [Porthole](../README.md) server: it joins your cluster as a
 hidden node (holding the distribution cookie) and serves Porthole's MCP tool
 over HTTP. Agents get a URL and a token, never the cookie.
 
+Your app needs nothing from Porthole: no dependency and no redeploy. The
+sidecar sends Porthole's read-only collection code with each query, and any
+Elixir app on OTP 27+ can be observed.
+
 It is configured entirely by environment variables and follows the cluster
 as nodes join and leave. You tell it where your app runs, not what its nodes
 are called: usually the same `DNS_CLUSTER_QUERY` your app clusters with.

@@ -6,21 +6,23 @@ agents when and how to use it, and the human side of the workflow.
 
 ## Install
 
-Add Porthole to your application. Only the node that *runs queries* needs
-SQLite, so `exqlite` can be a dev-only dependency:
+For development, add Porthole to your application. Only the node that *runs
+queries* needs SQLite, so `exqlite` can be a dev-only dependency:
 
 ```elixir
 def deps do
   [
-    {:porthole, "~> 0.1"},
-    # Only where queries run: your laptop, or the sidecar. Not your releases.
+    {:porthole, "~> 0.1", only: :dev},
     {:exqlite, "~> 0.41", only: :dev}
   ]
 end
 ```
 
-Nodes that are only *observed* (your production release) carry Porthole's
-collectors: plain Elixir, no NIFs, no processes, no configuration.
+Nodes that are only *observed* (your production release) need nothing from
+Porthole: no dependency, no configuration, no redeploy. Porthole sends its
+own read-only collection code over distribution and the node evaluates it
+with `:erl_eval`, which is part of OTP. Any Elixir app on OTP 27+ can be
+observed as it runs today.
 
 ## Development
 
@@ -30,7 +32,7 @@ named node, cookie, sidecar or token is needed.
 **1. Add the dependencies for development:**
 
 ```elixir
-{:porthole, "~> 0.1"},
+{:porthole, "~> 0.1", only: :dev},
 {:exqlite, "~> 0.41", only: :dev}
 ```
 
@@ -109,12 +111,12 @@ ends up next to the agent, which is fine in development and exactly what the
 ### Checking the setup
 
 `mix porthole.doctor` checks that each node can be observed: reachable,
-Porthole loaded, same version, OTP 27+, and a real collection. It explains
-what to fix when something is off:
+running Elixir on OTP 27+, and a real collection. It explains what to fix
+when something is off:
 
 ```console
 $ mix porthole.doctor --connect my_app@localhost --cookie dev
-✓ my_app@localhost  porthole 0.1.0, OTP 29, Elixir 1.20.4, latency 0ms, collection 5ms
+✓ my_app@localhost  OTP 29, Elixir 1.20.4, latency 0ms, collection 5ms
 ```
 
 To try Porthole without an app, `mix porthole.query --demo "..."` runs
@@ -170,12 +172,13 @@ Agents get a **URL and a token, never the cookie**.
 Agent ──HTTPS + token──▶ sidecar (holds the cookie) ──distribution──▶ your nodes
 ```
 
-Production nodes only need the `porthole` dependency in their release. The
-sidecar is deployed separately, inside the cluster's private network, so it
-keeps working when the app is struggling (which is when you need it) and
-the app carries no extra NIF, port or process.
+Your app does not change: it needs no Porthole dependency and no redeploy.
+The sidecar is deployed separately, inside the cluster's private network, so
+it keeps working when the app is struggling (which is when you need it) and
+the app carries no extra NIF, port or process. Removing the sidecar removes
+Porthole entirely.
 
-Setting it up for the first time takes six steps, in this order.
+Setting it up for the first time takes five steps, in this order.
 
 ### 1. Give your app a fixed cookie
 
@@ -201,19 +204,14 @@ Secret mounted as an environment variable in both Deployments. Many teams
 already do this so that clustering survives rolling deploys, when servers
 from two builds run side by side.
 
-### 2. Add Porthole to your app
-
-Add `{:porthole, "~> 0.1"}` to your app's dependencies and deploy. It adds no
-processes, configuration or native code to your servers; it makes the
-read-only collectors available to the sidecar.
-
-### 3. Create a token per client
+### 2. Create a token per client
 
 Each agent, team or person gets its own token, so the audit log says who
 asked and each can be revoked on its own:
 
-No server is needed for this: tokens are generated on your machine, in your
-app's repository (the task comes with the dependency).
+No server is needed for this: tokens are generated on your machine, in any
+project with Porthole as a dependency (your app's, for development) or in a
+checkout of Porthole.
 
 ```console
 $ mix porthole.gen.token oncall
@@ -232,7 +230,7 @@ or, for the sidecar, in PORTHOLE_TOKENS (comma separated):
     PORTHOLE_TOKENS=oncall:fd07d512979f51c4...
 
 Connect an agent, e.g. Claude Code (the URL is known once the sidecar is
-reachable, see step 5):
+reachable, see step 4):
 
     claude mcp add --transport http porthole <SIDECAR_URL> --header "Authorization: Bearer ph_EXAMPLE-not-a-real-token"
 ```
@@ -251,7 +249,7 @@ config :porthole, :tokens, [
 
 Removing an entry revokes the token.
 
-### 4. Run the sidecar
+### 3. Run the sidecar
 
 The sidecar is a small application in [`sidecar/`](https://github.com/mimiquate/porthole/tree/main/sidecar),
 configured entirely by environment variables and shipped as a release or a
@@ -270,7 +268,7 @@ already have:
 | Variable | Where it comes from |
 |---|---|
 | `RELEASE_COOKIE` | The same secret as your app (step 1) |
-| `PORTHOLE_TOKENS` | `mix porthole.gen.token` (step 3) |
+| `PORTHOLE_TOKENS` | `mix porthole.gen.token` (step 2) |
 | `DNS_CLUSTER_QUERY` | The same value your app clusters with (Phoenix apps have it, e.g. `my-app.internal` on Fly.io or the headless Service name on Kubernetes) |
 
 ```console
@@ -350,7 +348,7 @@ listens on `127.0.0.1` unless told otherwise, and serves HTTPS with
 (ingress, load balancer): tokens must not travel in clear text outside a
 trusted network.
 
-### 5. Make the sidecar reachable for agents
+### 4. Make the sidecar reachable for agents
 
 The agent's machine must reach the sidecar's port (4040 by default). How is
 up to you; the address you end up with is the sidecar URL:
@@ -367,9 +365,9 @@ it is authenticated, but the safest sidecar is one only your network can
 reach. Anywhere outside a trusted network, use HTTPS (tokens are bearer
 credentials).
 
-### 6. Connect the agent
+### 5. Connect the agent
 
-With the token from step 3 and the URL from step 5, e.g. for Claude Code:
+With the token from step 2 and the URL from step 4, e.g. for Claude Code:
 
 ```console
 $ claude mcp add --transport http porthole http://localhost:4040/ \
@@ -384,7 +382,10 @@ URL and header.
 ### Understand the trust boundary
 
 Porthole guarantees that **its tool** is read-only: queries cannot write,
-and collectors only read metadata. The cookie is different: in Erlang
+and collectors only read metadata. The only code that runs on your nodes is
+Porthole's own collection code, fixed when the sidecar is built and checked
+at compile time to call nothing but OTP's introspection functions; agents
+send SQL, never code, and SQL runs on the sidecar. The cookie is different: in Erlang
 distribution it grants full control of the cluster, and there is no
 read-only cookie. The sidecar keeps it out of the agent's reach, which holds
 as long as:
@@ -459,17 +460,19 @@ config :porthole, :audit, {MyOps.Audit, :record, []}
 
 ### Versions
 
-Porthole needs Elixir 1.18+ and OTP 27+ on every node, including the
-observed ones. A node on an older OTP answers with a clear error in
-`errors` (the rest of the cluster still answers) and is never crashed by it.
+Where queries run (your machine, the sidecar), Porthole needs Elixir 1.18+
+and OTP 27+. Observed nodes need Elixir and OTP 27+, and nothing from
+Porthole, so the sidecar and your app are upgraded independently. A node on
+an older OTP, or without Elixir, answers with a clear error in `errors` (the
+rest of the cluster still answers) and is never crashed by it.
 
 ### Cost
 
 Each query collects only the tables it mentions, once (twice with a window).
 Collecting `processes` calls `Process.info/2` for every process, so on a node
 with a million processes a query costs roughly what `:observer`'s process
-tab costs for one refresh. Nothing runs between queries, and observed nodes
-run no Porthole processes at all.
+tab costs for one refresh. Nothing runs between queries, and nothing stays
+on observed nodes after a query.
 
 On each observed node, collection:
 
@@ -478,7 +481,8 @@ On each observed node, collection:
 - has a **deadline enforced on the node itself**: past `timeout_ms` (plus the
   window) the work is stopped there, not merely abandoned by the caller
   (Erlang's `:erpc` does not stop remote work when the caller times out);
-- is **capped** by `max_rows` and `max_bytes` per table.
+- is **capped** by `max_rows` per table; `max_bytes` caps what the querying
+  node loads per table and node.
 
 Across the cluster, `max_concurrent` and `queries_per_minute` bound how much
 collection agents can trigger.

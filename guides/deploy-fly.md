@@ -37,15 +37,11 @@ The commands use these placeholders. Replace them with your own values:
    Without one, `mix release` generates a new cookie on every build and the
    sidecar cannot join. See [step 1 of the production
    setup](team-setup.md#1-give-your-app-a-fixed-cookie).
-2. **Your app depends on `:porthole` and is deployed with it.** That puts the
-   collectors on its nodes.
-3. **You have a checkout of this repository at the revision your app depends
-   on** (the `porthole` entry in your app's `mix.lock`). All commands run
-   from its root:
-   ```console
-   $ cd porthole && git checkout <revision from your app's mix.lock>
-   ```
-4. **`fly` is installed and logged in** to the organization that owns your
+2. **You have a checkout of this repository.** All commands run from its
+   root. Your app does not need Porthole as a dependency, and it is not
+   redeployed: the sidecar sends Porthole's read-only collection code to
+   your nodes with each query.
+3. **`fly` is installed and logged in** to the organization that owns your
    app.
 
 ## 1. Create the sidecar app and its secrets
@@ -115,7 +111,7 @@ Porthole sidecar observing: my-app-01J8X…@fdaa:0:…:2, my-app-01J8X…@fdaa:0
 | `cannot connect to: …` | Almost always `RELEASE_COOKIE` differs from the app's (see below) |
 | `found no nodes to observe` once, right after the sidecar starts, then `observing: …` | Harmless: Fly's internal DNS was not answering yet |
 | `found no nodes to observe` that persists | `DNS_CLUSTER_QUERY` is wrong, or the app runs in another organization |
-| Query errors saying `Porthole is not loaded` for the app's nodes | The app was not deployed with the `:porthole` dependency |
+| Query errors saying `this node does not run Elixir` or `Porthole needs OTP 27+` | The observed nodes are not an Elixir app on OTP 27+ |
 
 **Checking the cookie.** Fly's secret digests come from the values, so
 `RELEASE_COOKIE` must show **the same digest** in both:
@@ -166,7 +162,8 @@ asked, what, and the outcome.
 |---|---|
 | Give someone access | `mix porthole.gen.token <name>`, then `fly secrets set -a my-app-porthole PORTHOLE_TOKENS="<all entries>"` (setting a secret restarts the sidecar) |
 | Remove someone's access | Set `PORTHOLE_TOKENS` without their entry |
+| Remove Porthole | `fly apps destroy my-app-porthole`: nothing was installed in the app |
 | Deploy or scale the app | Nothing: the sidecar finds new machines within seconds |
-| Upgrade Porthole | Update the app's dependency and deploy it, then run step 2 from the same Porthole revision |
+| Upgrade Porthole | Update your checkout and run step 2 again; the app is not involved |
 | Rotate the cookie | Set the new `RELEASE_COOKIE` on both apps |
 | Review what agents looked at | `fly logs -a my-app-porthole`, `porthole.audit` lines |

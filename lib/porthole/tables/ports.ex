@@ -9,7 +9,7 @@ defmodule Porthole.Tables.Ports do
 
   @behaviour Porthole.Table
 
-  alias Porthole.{Table, Term}
+  alias Porthole.{Remote, Term}
 
   @impl true
   def name, do: "ports"
@@ -43,36 +43,33 @@ defmodule Porthole.Tables.Ports do
   end
 
   @impl true
-  def collect(max_rows) do
-    {ports, truncated} = Table.take(Port.list(), max_rows)
-    {Enum.flat_map(ports, &row/1), truncated}
-  end
+  def gather(limits), do: {:ports, [limits.max_rows]}
 
-  # A port closed mid-walk returns nil from Port.info/1,2.
-  defp row(port) do
-    with info when is_list(info) <- Port.info(port),
-         {:memory, memory} <- Port.info(port, :memory),
-         {:queue_size, queue_size} <- Port.info(port, :queue_size) do
-      name = List.to_string(info[:name])
-      socket? = name in ["tcp_inet", "udp_inet", "sctp_inet"]
+  @impl true
+  def shape(%{rows: rows, truncated: truncated}) do
+    rows =
+      for {port, info, memory, queue_size, addresses} <- rows do
+        {local_address, remote_address} =
+          case addresses do
+            {sockname, peername} -> {address(sockname), address(peername)}
+            :none -> {nil, nil}
+          end
 
-      [
         %{
-          port: inspect(port),
-          name: Term.truncate(name, 200),
-          owner: inspect(info[:connected]),
-          local_address: if(socket?, do: address(:inet.sockname(port))),
-          remote_address: if(socket?, do: address(:inet.peername(port))),
+          port: Remote.pid(port),
+          name: info[:name] |> List.to_string() |> Term.truncate(200),
+          owner: Remote.pid(info[:connected]),
+          local_address: local_address,
+          remote_address: remote_address,
           os_pid: if(is_integer(info[:os_pid]), do: info[:os_pid]),
           input: info[:input],
           output: info[:output],
           queue_size: queue_size,
           memory: memory
         }
-      ]
-    else
-      _closed -> []
-    end
+      end
+
+    {rows, truncated}
   end
 
   defp address({:ok, {ip, port}}), do: "#{:inet.ntoa(ip)}:#{port}"

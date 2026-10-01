@@ -1,5 +1,8 @@
 defmodule Porthole.MultiNodeTest do
-  @moduledoc "Peers get Porthole but not exqlite: observed nodes only need the collector."
+  @moduledoc """
+  Peer nodes: `observed` has Porthole's code (but not exqlite), `bare` is an
+  Elixir node without Porthole, `otp_only` has neither Porthole nor Elixir.
+  """
   use ExUnit.Case, async: false
 
   setup_all do
@@ -13,7 +16,12 @@ defmodule Porthole.MultiNodeTest do
     end
 
     paths = Enum.reject(:code.get_path(), &(to_string(&1) =~ "exqlite"))
-    %{observed: peer(paths), bare: peer(Enum.reject(paths, &(to_string(&1) =~ "porthole")))}
+
+    %{
+      observed: peer(paths),
+      bare: peer(Enum.reject(paths, &(to_string(&1) =~ "porthole"))),
+      otp_only: peer([])
+    }
   end
 
   test "observed nodes run no Porthole processes, even with the app started", %{
@@ -55,30 +63,43 @@ defmodule Porthole.MultiNodeTest do
     assert is_integer(max)
   end
 
-  test "a node without Porthole is reported; the others answer", %{observed: observed, bare: bare} do
-    result = Porthole.query!("SELECT DISTINCT node FROM applications", nodes: [observed, bare])
-    assert result.rows == [[to_string(observed)]]
-    assert [%{node: node, message: "Porthole is not loaded on this node" <> _}] = result.errors
-    assert node == to_string(bare)
+  test "a node without Porthole is observed like any other", %{observed: observed, bare: bare} do
+    assert :erpc.call(bare, :code, :which, [Porthole.Gather]) == :non_existing
+
+    result =
+      Porthole.query!("SELECT DISTINCT node FROM applications ORDER BY node",
+        nodes: [observed, bare]
+      )
+
+    assert Enum.sort(result.rows) == Enum.sort([[to_string(observed)], [to_string(bare)]])
+    assert result.errors == []
   end
 
-  test "doctor explains what is wrong with each node", %{observed: observed, bare: bare} do
-    checks = Porthole.Doctor.check([observed, bare, :nobody@nowhere])
+  test "a node without Elixir is reported; the others answer", %{bare: bare, otp_only: otp_only} do
+    result = Porthole.query!("SELECT DISTINCT node FROM processes", nodes: [bare, otp_only])
+
+    assert result.rows == [[to_string(bare)]]
+    assert [%{node: node, message: "this node does not run Elixir" <> _}] = result.errors
+    assert node == to_string(otp_only)
+  end
+
+  test "doctor explains what is wrong with each node", %{bare: bare, otp_only: otp_only} do
+    checks = Porthole.Doctor.check([bare, otp_only, :nobody@nowhere])
 
     assert [
-             %{status: :ok, porthole: vsn, otp: otp, problems: []},
-             %{status: :error, porthole: nil, problems: [not_loaded]},
+             %{status: :ok, otp: otp, elixir: elixir, problems: []},
+             %{status: :error, elixir: nil, problems: [no_elixir]},
              %{status: :error, problems: [unreachable]}
            ] = checks
 
-    assert vsn == Porthole.Collector.version()
     assert String.to_integer(otp) >= 27
-    assert not_loaded =~ "Porthole is not loaded"
+    assert elixir == System.version()
+    assert no_elixir =~ "does not run Elixir"
     assert unreachable =~ "not reachable"
 
     report = Porthole.Doctor.format(checks)
-    assert report =~ "✓ #{observed}"
-    assert report =~ "✗ #{bare}"
+    assert report =~ "✓ #{bare}"
+    assert report =~ "✗ #{otp_only}"
   end
 
   defp peer(paths) do
@@ -86,7 +107,8 @@ defmodule Porthole.MultiNodeTest do
     {:ok, pid, node} =
       :peer.start(%{name: :peer.random_name(), args: Enum.flat_map(paths, &[~c"-pa", &1])})
 
-    {:ok, _} = :erpc.call(node, :application, :ensure_all_started, [:elixir])
+    # The OTP-only peer has no Elixir to start.
+    if paths != [], do: {:ok, _} = :erpc.call(node, :application, :ensure_all_started, [:elixir])
     on_exit(fn -> :peer.stop(pid) end)
     node
   end

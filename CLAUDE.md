@@ -51,8 +51,8 @@ when a real question needs it.
     hashes in config), per-token policies, Origin checks, and structured audit (`Porthole.Audit`)
   - In-app development endpoint: `forward "/porthole", Porthole.MCP.Plug, auth: :localhost`
     (loopback-only, rejects proxied requests and browsers; never in production)
-  - `mix porthole.doctor` (`Porthole.Doctor`): per-node reachability, collector version,
-    OTP, latency and a real collection, with what to fix; `GET /healthz` on the HTTP plug
+  - `mix porthole.doctor` (`Porthole.Doctor`): per-node reachability, Elixir, OTP,
+    latency and a real collection, with what to fix; `GET /healthz` on the HTTP plug
 - **`sidecar/`**: a separate Mix project (depends on the library by path) that packages the
   production sidecar as a release and Docker image, configured only by env vars
   (`PortholeSidecar.Config`), tracking the cluster every 5s (seeds, their peers, DNS
@@ -79,9 +79,11 @@ when a real question needs it.
   host and via DNS). IPv6 lessons: pass parsed addresses to `:erl_epmd.names/1` (an IPv6
   string is taken for a hostname and fails with nxdomain), try both compressed and
   uncompressed spellings of IPv6 node names, and prefer the DNS address family of the
-  sidecar's own distribution; more client snippets, and a
-  versioned sidecar-to-node protocol so sidecar and app can be upgraded independently
-  (for now: upgrade both together; a mismatch is a clear per-node error). The Docker image is
+  sidecar's own distribution; more client snippets. Sidecar and app are upgraded
+  independently since collection by evaluation (no Porthole on observed nodes). Next:
+  `up`/`down` commands for a zero-redeploy production trial on Fly (fetch the cookie from
+  the app without displaying it, token, prebuilt sidecar image, tunnel; `down` destroys
+  it). The Docker image is
   verified (2026-09-28): compose with an app on long names and a fixed cookie, discovery
   from DNS_CLUSTER_QUERY, scaling 1→2→1, wrong cookie, missing config, non-root user.
   The builder image tag must exist on Docker Hub (hexpm/elixir tags carry a Debian date). Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package
@@ -120,13 +122,31 @@ looking, answers are exact "now", no state. History is out of scope.
   (e.g. for Datalog) without touching the collectors.
 - **Front doors:** CLI + MCP, which are thin.
 
-### Multi-node
+### Multi-node: collection by evaluation
 
-- The querying node fans out collection with `:erpc.multicall`.
+- **Observed nodes need no Porthole** (decision 2026-10-01): only Elixir and OTP 27+.
+  This is what makes a production trial possible without changing or redeploying the app,
+  and lets sidecar and app be upgraded independently.
+- Each table is two halves: `gather/1` names a function in `Porthole.Gather` that reads raw
+  data on the node, and `shape/1` turns it into rows on the querying node (shaping, term
+  rendering and deltas never run on production nodes).
+- `Porthole.Remote` sends the *compiled* code of those functions (Erlang abstract code) and
+  the node evaluates it with `:erl_eval` via `:erpc`. Nothing is loaded on the node. The
+  querying node calls `Porthole.Gather` directly for itself.
+- **Rules for `Porthole.Gather`, enforced at build time** by `Porthole.Gather.Check`
+  (`@after_compile`; a violation fails the build): call only OTP modules plus
+  `Enum.reduce/3` (what `for` compiles to; the node may run another Elixir version), and
+  no calls to sibling functions (an evaluated fun cannot see them; use anonymous helpers).
+  The check also stores each function's abstract code in `Porthole.Gather.Code` at build
+  time, because releases strip debug info.
+- Trust model: the only code evaluated on nodes is Porthole's own, fixed at build time and
+  read-only. Agents send SQL, never code; SQL runs on the querying node. Evaluating needs
+  nothing beyond the cookie the querying node already holds.
+- Pids, ports and refs are rendered as their own node sees them (`Remote.pid/1`).
+- Cost: evaluation is ~1.9× slower than compiled code on the node (measured: 241 ms vs
+  126 ms for 100k processes; ~2.5× end to end including transfer and shaping).
 - Every row gets a `node` column; all nodes' rows go into one in-memory DB.
-- Only the querying node needs `exqlite`. Other nodes need only the pure-Elixir collector.
-- **Sidecar deployment:** the query layer can run on a separate node that joins the cluster,
-  so production nodes carry no NIF. Keep the collector free of NIF deps to preserve this.
+- Only the querying node needs `exqlite`. Keep `Porthole.Gather` free of NIF deps.
 - **Decision (2026-09-28): production means a separate sidecar, with a fixed cookie.**
   Running Porthole embedded in the app (plug in the prod router) was considered and set aside:
   it avoids cookie handling, but an overloaded or down app takes Porthole with it (exactly
@@ -146,7 +166,8 @@ looking, answers are exact "now", no state. History is out of scope.
   therefore runs in a low-priority worker with a deadline enforced on the observed node
   itself, and the tables leave out the collecting processes (`self()` and `$callers`).
   Never rely on the caller's timeout alone to bound work on a production node.
-- Hard caps (policy): rows and bytes collected per table per node, rows returned,
+- Hard caps (policy): rows collected per table per node (on the node), bytes loaded per
+  table per node (on the querying node), rows returned,
   query/collection timeout, window length; cells are cut at 1 KB. Every cut sets `truncated`
   and adds a human-readable entry to `notes` saying which limit cut it.
 - Load limits (policy, enforced by `Porthole.Limiter`): `max_concurrent` queries on the
@@ -155,7 +176,7 @@ looking, answers are exact "now", no state. History is out of scope.
   are only concurrency-limited). Rejections are `:busy` / `:rate_limited` errors with a retry
   hint; rejected queries don't count. The limiter monitors query processes so crashes free
   slots, and it only starts where SQLite is available: observed nodes run no Porthole
-  processes (tested).
+  processes (tested), and don't need Porthole at all.
 - The snapshot is **not atomic**, since processes change during the walk. Document this.
 
 ### Trust boundary (important)
@@ -174,10 +195,11 @@ wrapped in `if Code.ensure_loaded?(...)`.
 
 ### Versions
 
-Elixir 1.18+ (built-in `JSON`) and OTP 27+ (`Process.info/2` with `{:dictionary, key}` fails
-on OTP 25; OTP 26 is untested). CI (`.github/workflows/ci.yml`) runs 1.18/27, 1.19/28 and
-1.20/29. The collector checks the OTP version per query and reports old nodes in `errors`;
-never add checks that could crash a host application at boot.
+Elixir 1.18+ (built-in `JSON`) and OTP 27+ where queries run. Observed nodes: Elixir (any
+recent version) and OTP 27+ (`Process.info/2` with `{:dictionary, key}` fails on OTP 25;
+OTP 26 is untested). CI (`.github/workflows/ci.yml`) runs 1.18/27, 1.19/28 and 1.20/29.
+The gather code checks the OTP version per query and reports old nodes, and nodes without
+Elixir, in `errors`; never add checks that could crash a host application at boot.
 
 ### Capability tiers (the model is designed now, only Observe is implemented)
 
@@ -195,7 +217,8 @@ same model as Airlock. Every query should be audit-loggable: queries emit
 ## Tables
 
 Each table is a module in `lib/porthole/tables/` implementing `Porthole.Table` (`name`,
-`description`, `columns`, `key`, `deltas`, `collect/1`) and listed in `Porthole.Table.all/0`.
+`description`, `columns`, `key`, `deltas`, `gather/1`, `shape/1`) and listed in
+`Porthole.Table.all/0`. Its node-side half is a function in `Porthole.Gather`.
 Every table also gets a `node` column at load time. Column docs live in the modules and flow
 into the MCP tool description, so keep them short and useful to an agent.
 
@@ -246,8 +269,8 @@ All of these are answered with one query each in `test/porthole/eval_test.exs` a
 ## Working conventions
 
 - Write tests with a real test supervision tree and spawned processes. Don't mock the runtime.
-  Multi-node tests use `:peer` nodes without `exqlite` on their code path, which proves
-  observed nodes only need the collector.
+  Multi-node tests use `:peer` nodes with only Elixir on their code path (no Porthole, no
+  `exqlite`), which proves observed nodes need nothing from Porthole.
 - `Porthole.Demo` (`test/support/porthole/demo.ex`, also compiled in dev for
   `mix porthole.query --demo`) starts `:shop`, a small OTP application with planted problems,
   one per eval question: serializing server, leak, restart loop, stuck mailbox, growing ETS,

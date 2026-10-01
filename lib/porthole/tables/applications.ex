@@ -6,8 +6,6 @@ defmodule Porthole.Tables.Applications do
 
   @behaviour Porthole.Table
 
-  alias Porthole.Table
-
   @impl true
   def name, do: "applications"
 
@@ -31,12 +29,14 @@ defmodule Porthole.Tables.Applications do
   end
 
   @impl true
-  def collect(max_rows) do
-    running = MapSet.new(Application.started_applications(), &elem(&1, 0))
-    {apps, truncated} = Table.take(Application.loaded_applications(), max_rows)
+  def gather(_limits), do: {:applications, []}
+
+  @impl true
+  def shape(%{loaded: loaded, running: running}) do
+    running = MapSet.new(running, &elem(&1, 0))
 
     rows =
-      for {app, description, vsn} <- apps do
+      for {app, description, vsn} <- loaded do
         %{
           name: Atom.to_string(app),
           vsn: to_string(vsn),
@@ -45,6 +45,6 @@ defmodule Porthole.Tables.Applications do
         }
       end
 
-    {rows, truncated}
+    {rows, false}
   end
 end

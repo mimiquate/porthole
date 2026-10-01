@@ -15,9 +15,7 @@ defmodule Porthole.Tables.Supervisors do
 
   @behaviour Porthole.Table
 
-  alias Porthole.{Table, Term}
-
-  @timeout 1_000
+  alias Porthole.{Remote, Term}
 
   @impl true
   def name, do: "supervisors"
@@ -47,56 +45,33 @@ defmodule Porthole.Tables.Supervisors do
   end
 
   @impl true
-  def collect(max_rows) do
-    supervisors()
-    |> Stream.flat_map(&rows/1)
-    |> Enum.take(max_rows + 1)
-    |> Table.take(max_rows)
-  end
+  def gather(limits), do: {:supervisors, [limits.max_rows, limits.call_timeout]}
 
-  defp supervisors do
-    for pid <- Process.list(),
-        [{_, {:supervisor, module, _}}, {_, name}] <-
-          [Process.info(pid, [{:dictionary, :"$initial_call"}, :registered_name])],
-        do: %{
-          pid: inspect(pid),
+  @impl true
+  def shape(%{rows: rows, truncated: truncated}) do
+    rows =
+      for {pid, module, name, child} <- rows do
+        supervisor = %{
+          pid: Remote.pid(pid),
           module: Term.name(module),
-          name: if(name == [], do: nil, else: Term.name(name)),
-          ref: pid
+          name: if(name == [], do: nil, else: Term.name(name))
         }
+
+        Map.merge(supervisor, child_columns(child))
+      end
+
+    {rows, truncated}
   end
 
-  defp rows(%{ref: pid} = supervisor) do
-    supervisor = Map.delete(supervisor, :ref)
-
-    case which_children(pid) do
-      {:ok, children} ->
-        for {id, child, type, _modules} <- children do
-          Map.merge(supervisor, %{
-            child_id: if(is_atom(id), do: Term.name(id), else: Term.render(id)),
-            child_pid: if(is_pid(child), do: inspect(child)),
-            child_status: if(is_pid(child), do: "running", else: to_string(child)),
-            child_type: Atom.to_string(type)
-          })
-        end
-
-      :error ->
-        [
-          Map.merge(supervisor, %{
-            child_id: nil,
-            child_pid: nil,
-            child_status: "unreachable",
-            child_type: nil
-          })
-        ]
-    end
+  defp child_columns({id, child, type, _modules}) do
+    %{
+      child_id: if(is_atom(id), do: Term.name(id), else: Term.render(id)),
+      child_pid: if(is_pid(child), do: Remote.pid(child)),
+      child_status: if(is_pid(child), do: "running", else: to_string(child)),
+      child_type: Atom.to_string(type)
+    }
   end
 
-  # gen_server calls use aliases, so a late reply is dropped, not left in
-  # our mailbox.
-  defp which_children(pid) do
-    {:ok, :gen_server.call(pid, :which_children, @timeout)}
-  catch
-    :exit, _ -> :error
-  end
+  defp child_columns(:unreachable),
+    do: %{child_id: nil, child_pid: nil, child_status: "unreachable", child_type: nil}
 end

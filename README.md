@@ -30,9 +30,10 @@ $ mix porthole.query --connect my_app@127.0.0.1 --cookie secret --window 5000 \
     "SELECT registered_name, reductions_delta FROM processes ORDER BY 2 DESC LIMIT 10"
 ```
 
-If a node doesn't answer, `mix porthole.doctor` checks each node
-(reachable, Porthole loaded, versions, a real collection) and explains what
-to fix.
+The app being queried does not need Porthole: it only needs to be an Elixir
+app on OTP 27+ that you can connect to with its cookie. If a node doesn't
+answer, `mix porthole.doctor` checks each node (reachable, Elixir, OTP, a
+real collection) and explains what to fix.
 
 From a remote shell or IEx: `Porthole.print("SELECT ...")`, or
 `Porthole.query/2` for a `Porthole.Result`.
@@ -53,7 +54,8 @@ For agents, Porthole is an MCP server with one `query` tool.
 
 - **In production**, `mix porthole.server` runs a sidecar inside the cluster
   that holds the cookie and serves MCP over HTTP. Agents get a URL and a token
-  (`mix porthole.gen.token`), never the cookie:
+  (`mix porthole.gen.token`), never the cookie. The app itself is not
+  changed or redeployed:
 
   ```console
   $ mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" --all-nodes --bind 0.0.0.0
@@ -109,7 +111,7 @@ Every table has a `node` column. With a window, `processes` gains
 ## How it works
 
 For every query, Porthole finds the tables the SQL mentions, collects them
-right now on each requested node (`:erpc.multicall`), loads the rows into a
+right now on each requested node, loads the rows into a
 fresh in-memory SQLite database, runs the query and throws the database away.
 SQLite is a query engine here, not a replica: it provides the joins,
 aggregates and subqueries, and the running system stays the source of truth.
@@ -122,8 +124,12 @@ aggregates and subqueries, and the running system stays the source of truth.
   Collection runs at low priority with a deadline enforced on each node, and
   queries are rate limited per client and capped in concurrency.
 - **Not atomic.** Processes change while a table is walked.
-- **Sidecar-friendly.** Only the querying node needs SQLite (`exqlite` is an
-  optional dependency). Observed nodes need only the pure-Elixir collectors.
+- **Nothing to install on observed nodes.** Porthole sends its own fixed,
+  read-only collection code over distribution and the node evaluates it
+  (`:erl_eval`, part of OTP): any Elixir app on OTP 27+ can be observed
+  without adding Porthole as a dependency or redeploying it. Agents never
+  send code, only SQL, which runs on the querying node (the only one that
+  needs SQLite; `exqlite` is an optional dependency).
 - **Authenticated.** The HTTP server requires a bearer token per client; each
   token carries its own policy, and removing it revokes access.
 - **Policies** define every tier (`observe`, `trace`, `evaluate`, `mutate`)
@@ -132,7 +138,8 @@ aggregates and subqueries, and the running system stays the source of truth.
 - **Auditable.** Every query from an agent is recorded as structured JSON
   (client, SQL, nodes, outcome, duration); every query also emits
   `[:porthole, :query, *]` telemetry.
-- **Versions.** Elixir 1.18+ and OTP 27+ on every node, tested in CI.
+- **Versions.** Elixir 1.18+ and OTP 27+ where queries run; observed nodes
+  need Elixir and OTP 27+. Tested in CI.
 
 ## Development
 

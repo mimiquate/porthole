@@ -43,7 +43,8 @@ defmodule Porthole do
   """
   @spec collect(String.t(), pos_integer()) :: {:ok, {[Table.row()], boolean()}} | :error
   def collect(table, max_rows \\ 50_000) do
-    with {:ok, table} <- Table.fetch(table), do: {:ok, table.collect(max_rows)}
+    with {:ok, table} <- Table.fetch(table),
+         do: {:ok, Table.collect(table, %{max_rows: max_rows, call_timeout: 1_000})}
   end
 
   @doc "Tables and their columns, with documentation."

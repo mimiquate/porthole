@@ -8,7 +8,7 @@ defmodule Porthole.Tables.Processes do
 
   @behaviour Porthole.Table
 
-  alias Porthole.{Remote, Table, Term}
+  alias Porthole.{Remote, Term}
 
   @items [
     :registered_name,
@@ -67,30 +67,12 @@ defmodule Porthole.Tables.Processes do
   end
 
   @impl true
-  def collect(max_rows) do
-    # Leave out the processes doing the collection: they would otherwise
-    # report their own work (e.g. as the top reductions_delta on a quiet node).
-    caller = List.first(Process.get(:"$callers", []), self())
-    raw = Porthole.Gather.processes(caller, @items, max_rows)
-    {shape(raw), raw.truncated}
-  end
+  def gather(limits), do: {:processes, [@items, limits.max_rows]}
 
-  @doc false
-  # Prototype: collects this table on `node` by evaluating Porthole.Gather's
-  # code there, with no Porthole code on the node.
-  @spec collect_remote(node(), pos_integer(), pos_integer()) ::
-          {:ok, {[Table.row()], boolean()}} | {:error, term()}
-  def collect_remote(node, max_rows, budget) do
-    with {:ok, raw} <- Porthole.Remote.run(node, :processes, [@items, max_rows], budget) do
-      {:ok, {shape(raw), raw.truncated}}
-    end
-  end
-
-  @doc false
-  @spec shape(map()) :: [Table.row()]
-  def shape(%{rows: rows, masters: masters}) do
+  @impl true
+  def shape(%{rows: rows, truncated: truncated, masters: masters}) do
     applications = Map.new(masters, fn {master, app} -> {master, Atom.to_string(app)} end)
-    for {pid, info} <- rows, do: row(pid, Map.new(info), applications)
+    {for({pid, info} <- rows, do: row(pid, Map.new(info), applications)), truncated}
   end
 
   defp row(pid, info, applications) do

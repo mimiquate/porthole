@@ -59,25 +59,33 @@ defmodule Porthole.Tables.System do
   end
 
   @impl true
-  def collect(_max_rows) do
-    memory = :erlang.memory()
-    {total_reductions, _since_last} = :erlang.statistics(:reductions)
+  def gather(_limits), do: {:system, []}
+
+  @impl true
+  def shape(raw) do
+    memory = raw.memory
+
+    elixir_version =
+      case raw.elixir_vsn do
+        {:ok, vsn} -> to_string(vsn)
+        :undefined -> nil
+      end
 
     row = %{
-      otp_release: to_string(:erlang.system_info(:otp_release)),
-      elixir_version: System.version(),
-      uptime_ms: elem(:erlang.statistics(:wall_clock), 0),
-      schedulers_online: :erlang.system_info(:schedulers_online),
-      run_queue: :erlang.statistics(:total_run_queue_lengths),
-      process_count: :erlang.system_info(:process_count),
-      process_limit: :erlang.system_info(:process_limit),
-      atom_count: :erlang.system_info(:atom_count),
-      atom_limit: :erlang.system_info(:atom_limit),
-      port_count: :erlang.system_info(:port_count),
-      port_limit: :erlang.system_info(:port_limit),
-      ets_count: :erlang.system_info(:ets_count),
-      ets_limit: :erlang.system_info(:ets_limit),
-      reductions: total_reductions,
+      otp_release: to_string(raw.otp_release),
+      elixir_version: elixir_version,
+      uptime_ms: raw.uptime_ms,
+      schedulers_online: raw.schedulers_online,
+      run_queue: raw.run_queue,
+      process_count: raw.process_count,
+      process_limit: raw.process_limit,
+      atom_count: raw.atom_count,
+      atom_limit: raw.atom_limit,
+      port_count: raw.port_count,
+      port_limit: raw.port_limit,
+      ets_count: raw.ets_count,
+      ets_limit: raw.ets_limit,
+      reductions: raw.reductions,
       memory_total: memory[:total],
       memory_processes: memory[:processes],
       memory_binary: memory[:binary],

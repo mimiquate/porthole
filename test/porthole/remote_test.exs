@@ -5,7 +5,14 @@ defmodule Porthole.RemoteTest do
   """
   use ExUnit.Case, async: false
 
+  alias Porthole.{Collector, Remote, Table}
   alias Porthole.Tables.Processes
+
+  # The processes table, read on `node` by evaluation and shaped here.
+  defp collect_remote(node, max_rows, budget) do
+    {name, args} = Processes.gather(%{max_rows: max_rows, call_timeout: 1_000})
+    with {:ok, raw} <- Remote.run(node, name, args, budget), do: {:ok, Processes.shape(raw)}
+  end
 
   setup_all do
     unless Node.alive?() do
@@ -42,7 +49,7 @@ defmodule Porthole.RemoteTest do
   end
 
   test "collects processes from a node without Porthole", %{node: node, probe: probe} do
-    assert {:ok, {rows, false}} = Processes.collect_remote(node, 50_000, 5_000)
+    assert {:ok, {rows, false}} = collect_remote(node, 50_000, 5_000)
 
     assert %{pid: pid, registered_name: "probe_proc", current_function: ":timer.sleep/1"} =
              Enum.find(rows, &(&1.registered_name == "probe_proc"))
@@ -63,13 +70,13 @@ defmodule Porthole.RemoteTest do
   end
 
   test "the collecting processes are not in the results", %{node: node} do
-    {:ok, {rows, _}} = Processes.collect_remote(node, 50_000, 5_000)
+    {:ok, {rows, _}} = collect_remote(node, 50_000, 5_000)
     refute Enum.any?(rows, &(&1.initial_call == ":erpc.execute_call/4"))
   end
 
   test "rows match the compiled collector on stable fields" do
-    {:ok, {remote, _}} = Processes.collect_remote(node(), 50_000, 5_000)
-    {compiled, _} = Processes.collect(50_000)
+    {:ok, {remote, _}} = collect_remote(node(), 50_000, 5_000)
+    {compiled, _} = Table.collect(Processes, %{max_rows: 50_000, call_timeout: 1_000})
 
     stable = fn rows ->
       for row <- rows,
@@ -91,7 +98,7 @@ defmodule Porthole.RemoteTest do
 
     before = :erpc.call(node, :erlang, :system_info, [:process_count])
 
-    assert {:error, :timeout} = Processes.collect_remote(node, 50_000, 1)
+    assert {:error, :timeout} = collect_remote(node, 50_000, 1)
 
     Process.sleep(100)
     assert :erpc.call(node, :erlang, :system_info, [:process_count]) <= before
@@ -99,6 +106,30 @@ defmodule Porthole.RemoteTest do
   end
 
   test "maximum rows still apply", %{node: node} do
-    assert {:ok, {[_, _, _], true}} = Processes.collect_remote(node, 3, 5_000)
+    assert {:ok, {[_, _, _], true}} = collect_remote(node, 3, 5_000)
+  end
+
+  test "every table collects from a node without Porthole", %{node: node} do
+    names = Enum.map(Table.all(), & &1.name())
+    limits = %{max_rows: 50_000, max_bytes: 10_000_000}
+
+    assert {%{^node => tables}, []} = Collector.collect([node], names, nil, limits, 5_000)
+
+    for name <- names do
+      assert {[_ | _], false} = tables[name], "no rows for #{name}"
+    end
+
+    assert {rows, _} = tables["supervisors"]
+    assert Enum.any?(rows, &(&1.name == "kernel_sup"))
+  end
+
+  test "sampling windows work on a node without Porthole", %{node: node} do
+    limits = %{max_rows: 50_000, max_bytes: 10_000_000}
+
+    assert {%{^node => %{"processes" => {rows, false}}}, []} =
+             Collector.collect([node], ["processes"], 50, limits, 5_000)
+
+    assert Enum.all?(rows, &Map.has_key?(&1, :reductions_delta))
+    assert Enum.any?(rows, &is_integer(&1.reductions_delta))
   end
 end

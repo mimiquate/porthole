@@ -2,9 +2,11 @@ defmodule Porthole.Table do
   @moduledoc """
   The behaviour every table implements, and the table registry.
 
-  A table is a pure-Elixir function that walks the local node and returns
-  rows (maps of text, integers and booleans). Tables never touch SQLite, so
-  observed nodes need nothing but these modules.
+  A table is two halves: a `Porthole.Gather` function that reads raw data on
+  the observed node (`c:gather/1` names it), and `c:shape/1`, which turns
+  that data into rows (maps of text, integers and booleans) on the querying
+  node. Observed nodes never need Porthole: the gather function's code is
+  evaluated there (see `Porthole.Remote`).
 
   When a query samples over a window, every column listed in `c:deltas/0`
   gets a `<column>_delta` companion: its change between the start and the end
@@ -18,6 +20,9 @@ defmodule Porthole.Table do
   @type column :: {atom(), :text | :integer | :boolean, String.t()}
   @type row :: %{atom() => String.t() | integer() | boolean() | nil}
 
+  @typedoc "Collection limits for one table on one node."
+  @type limits :: %{max_rows: pos_integer(), call_timeout: timeout()}
+
   @callback name() :: String.t()
   @callback description() :: String.t()
   @callback columns() :: [column()]
@@ -25,8 +30,17 @@ defmodule Porthole.Table do
   @callback key() :: atom()
   @doc "Integer columns that get a `_delta` column when sampling."
   @callback deltas() :: [atom()]
-  @doc "Collects at most `max_rows` rows; the flag tells if rows were left out."
-  @callback collect(max_rows :: pos_integer()) :: {[row()], truncated :: boolean()}
+  @doc """
+  The `Porthole.Gather` function that reads this table's raw data on a node,
+  and its arguments (after the caller's pid), within `limits`.
+  """
+  @callback gather(limits()) :: {atom(), list()}
+
+  @doc """
+  Turns raw data from the gather function into rows; the flag tells whether
+  rows were left out. Runs on the querying node.
+  """
+  @callback shape(raw :: term()) :: {[row()], truncated :: boolean()}
 
   @tables [
     Porthole.Tables.Processes,
@@ -78,11 +92,12 @@ defmodule Porthole.Table do
 
   defp delta(column), do: :"#{column}_delta"
 
-  @doc false
-  # Takes at most `max` elements, telling whether any were left out.
-  @spec take([term()], pos_integer()) :: {[term()], boolean()}
-  def take(list, max) do
-    {taken, rest} = Enum.split(list, max)
-    {taken, rest != []}
+  @doc """
+  Collects `table` on this node, by calling its gather function directly.
+  """
+  @spec collect(module(), limits()) :: {[row()], boolean()}
+  def collect(table, limits) do
+    {name, args} = table.gather(limits)
+    table.shape(apply(Porthole.Gather, name, [self() | args]))
   end
 end

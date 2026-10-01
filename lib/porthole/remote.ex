@@ -51,13 +51,13 @@ defmodule Porthole.Remote do
   end
 
   @doc """
-  Renders a pid the way the node that owns it sees it (`#PID<0.214.0>`),
-  wherever it is rendered. Pids from other nodes otherwise render with the
-  local node's index for them (`#PID<15623.214.0>`).
+  Renders a pid, port or reference the way the node that owns it sees it
+  (`#PID<0.214.0>`, `#Port<0.16>`), wherever it is rendered. Rendered on
+  another node, they would carry that node's index for their owner instead
+  (`#PID<15623.214.0>`).
   """
-  @spec pid(pid()) :: String.t()
-  def pid(pid) when is_pid(pid) do
-    [_node_index | rest] = pid |> :erlang.pid_to_list() |> to_string() |> String.split(".")
-    "#PID<0." <> Enum.join(rest, ".")
+  @spec pid(pid() | port() | reference()) :: String.t()
+  def pid(term) when is_pid(term) or is_port(term) or is_reference(term) do
+    String.replace(inspect(term), ~r/<\d+\./, "<0.", global: false)
   end
 end

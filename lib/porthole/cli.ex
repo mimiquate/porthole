@@ -4,7 +4,7 @@ defmodule Porthole.CLI do
 
     * `--connect NODE` / `--cookie COOKIE` - join a running node as a hidden
       node and query it, without starting this project's app. SQLite runs
-      here; the target only needs Porthole's collector.
+      here; the target needs nothing from Porthole (Elixir on OTP 27+).
     * `--node NODE` (repeatable) / `--all-nodes` - nodes to query.
     * `--window MS` - sampling window.
     * `--demo` - start the demo app (a small shop with planted problems) first

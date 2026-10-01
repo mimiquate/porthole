@@ -3,9 +3,9 @@ defmodule Porthole.Doctor do
   Checks that Porthole can observe each node, and says what to fix when it
   cannot. Run it with `mix porthole.doctor`.
 
-  For every node: is it reachable, is Porthole loaded and at which version
-  (compared with the querying node), which OTP and Elixir it runs, the
-  round-trip latency, and whether a real (small) collection succeeds.
+  For every node: is it reachable, which OTP and Elixir it runs (the node
+  needs OTP 27+ and Elixir, but not Porthole), the round-trip latency, and
+  whether a real (small) collection succeeds.
   """
 
   alias Porthole.Collector
@@ -13,7 +13,6 @@ defmodule Porthole.Doctor do
   @type check :: %{
           node: String.t(),
           status: :ok | :warning | :error,
-          porthole: String.t() | nil,
           otp: String.t() | nil,
           elixir: String.t() | nil,
           latency_ms: non_neg_integer() | nil,
@@ -30,7 +29,6 @@ defmodule Porthole.Doctor do
   defp check_node(node) do
     base = %{
       node: Atom.to_string(node),
-      porthole: nil,
       otp: nil,
       elixir: nil,
       latency_ms: nil,
@@ -39,14 +37,17 @@ defmodule Porthole.Doctor do
 
     case timed(fn -> remote(node, :erlang, :node, []) end) do
       {{:ok, _}, latency} ->
+        # Only OTP calls: the node does not need Porthole.
         facts = %{
-          porthole: remote_value(node, Porthole.Collector, :version, []),
           otp: remote_value(node, :erlang, :system_info, [:otp_release]),
-          elixir: remote_value(node, System, :version, [])
+          elixir:
+            case remote(node, :application, :get_key, [:elixir, :vsn]) do
+              {:ok, {:ok, vsn}} -> List.to_string(vsn)
+              _ -> nil
+            end
         }
 
-        # Without Porthole on the node, a collection can only repeat that.
-        {collect_ms, collect_problem} = if facts.porthole, do: try_collect(node), else: {nil, nil}
+        {collect_ms, collect_problem} = try_collect(node)
 
         base
         |> Map.merge(facts)
@@ -59,29 +60,20 @@ defmodule Porthole.Doctor do
   end
 
   defp judge(check, collect_problem) do
-    local = Collector.version()
-
     problems =
       Enum.reject(
         [
-          check.porthole == nil &&
-            "Porthole is not loaded: add {:porthole, ...} to this node's release",
-          check.porthole && check.porthole != local &&
-            "Porthole #{check.porthole} here, #{local} on the querying node: use the same version",
+          check.elixir == nil &&
+            "this node does not run Elixir (Porthole observes Elixir applications)",
           check.otp && String.to_integer(check.otp) < 27 &&
             "OTP #{check.otp}: Porthole needs OTP 27+",
-          collect_problem
+          # Already explained by the problems above.
+          check.elixir != nil && collect_problem
         ],
         &(&1 in [nil, false])
       )
 
-    status =
-      cond do
-        collect_problem != nil or check.porthole == nil -> :error
-        problems != [] -> :warning
-        true -> :ok
-      end
-
+    status = if problems == [], do: :ok, else: :error
     Map.merge(check, %{status: status, problems: problems})
   end
 
@@ -145,7 +137,6 @@ defmodule Porthole.Doctor do
 
       facts =
         [
-          check.porthole && "porthole #{check.porthole}",
           check.otp && "OTP #{check.otp}",
           check.elixir && "Elixir #{check.elixir}",
           check.latency_ms && "latency #{check.latency_ms}ms",
