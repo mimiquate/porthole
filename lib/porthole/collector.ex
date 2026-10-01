@@ -132,7 +132,7 @@ defmodule Porthole.Collector do
   defp describe({:old_otp, release}, _),
     do: "Porthole needs OTP 27+, this node runs OTP #{release}"
 
-  defp describe({:undef, [{Enum, _fun, _args, _location} | _]}, _),
+  defp describe(:no_elixir, _),
     do: "this node does not run Elixir (Porthole observes Elixir applications)"
 
   defp describe({:error, {:erpc, :noconnection}}, _), do: "node is not reachable"

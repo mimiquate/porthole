@@ -29,7 +29,8 @@ defmodule Porthole.Gather do
   @doc """
   Runs `gather` (with the caller's pid prepended to `args`) in a low-priority
   worker, killing it if it takes longer than `budget` milliseconds. This is
-  the node-side safeguard around every collection.
+  the node-side safeguard around every collection. A failure in `gather` is
+  returned as `{:error, {kind, reason}}`, never logged on the node.
   """
   @spec with_deadline(fun(), list(), pos_integer()) :: {:ok, term()} | {:error, term()}
   def with_deadline(gather, args, budget) do
@@ -44,16 +45,27 @@ defmodule Porthole.Gather do
           :erlang.spawn_monitor(fn ->
             :erlang.process_flag(:priority, :low)
 
-            :erlang.send(
-              caller,
-              {:porthole_result, :erlang.self(), :erlang.apply(gather, [caller | args])}
-            )
+            # A crash would be logged on the node (and reach the app's error
+            # tracker): failures are returned instead.
+            result =
+              try do
+                {:ok, :erlang.apply(gather, [caller | args])}
+              catch
+                kind, reason ->
+                  case {kind, reason, __STACKTRACE__} do
+                    # Gather code uses Enum.reduce/3 (what `for` compiles to).
+                    {:error, :undef, [{Enum, _fun, _args, _location} | _]} -> {:error, :no_elixir}
+                    _other -> {:error, {kind, reason}}
+                  end
+              end
+
+            :erlang.send(caller, {:porthole_result, :erlang.self(), result})
           end)
 
         receive do
           {:porthole_result, ^worker, result} ->
             :erlang.demonitor(ref, [:flush])
-            {:ok, result}
+            result
 
           {:DOWN, ^ref, :process, ^worker, reason} ->
             {:error, reason}
