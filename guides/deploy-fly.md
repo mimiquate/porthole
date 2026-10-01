@@ -13,11 +13,11 @@ Responsibilities are split explicitly:
 | The `fly` commands below | Everything specific to your app, passed as flags |
 | Fly secrets on the sidecar app | `RELEASE_COOKIE` and `PORTHOLE_TOKENS` |
 
-> **Status:** each piece has been verified (the Docker image, IPv6
-> distribution, discovery from a DNS name, tokens and audit), and every flag
-> below is from flyctl's documentation, but a complete deploy on Fly.io
-> itself has not been run yet. If a step does not behave as described,
-> please open an issue.
+> **Status:** used in production (October 2026) for a Phoenix app on Fly.io
+> whose node names change with every deploy (`app-<image id>@<IPv6>`): the
+> sidecar found its nodes from the DNS name alone, and agents query it
+> through `fly proxy`. If a step does not behave as described, please open
+> an issue.
 
 ## Values you need
 
@@ -112,9 +112,28 @@ Porthole sidecar observing: my-app-01J8X…@fdaa:0:…:2, my-app-01J8X…@fdaa:0
 | What you see | Meaning |
 |---|---|
 | `observing: …`, with every app machine | Ready |
-| `cannot connect to: …` | Almost always `RELEASE_COOKIE` differs from the app's |
-| `found no nodes to observe` | `DNS_CLUSTER_QUERY` is wrong, or the app runs in another organization |
+| `cannot connect to: …` | Almost always `RELEASE_COOKIE` differs from the app's (see below) |
+| `found no nodes to observe` once, right after the sidecar starts, then `observing: …` | Harmless: Fly's internal DNS was not answering yet |
+| `found no nodes to observe` that persists | `DNS_CLUSTER_QUERY` is wrong, or the app runs in another organization |
 | Query errors saying `Porthole is not loaded` for the app's nodes | The app was not deployed with the `:porthole` dependency |
+
+**Checking the cookie.** Fly's secret digests come from the values, so
+`RELEASE_COOKIE` must show **the same digest** in both:
+
+```console
+$ fly secrets list -a my-app
+$ fly secrets list -a my-app-porthole
+```
+
+When they differ, the app's logs show the sidecar being turned away
+(`Connection attempt from node … rejected. Invalid challenge reply.`). Copy
+the app's exact value to the sidecar without displaying it (this also
+restarts the sidecar):
+
+```console
+$ fly secrets set -a my-app-porthole \
+    RELEASE_COOKIE="$(fly ssh console -a my-app -C 'printenv RELEASE_COOKIE' | tail -1 | tr -d '\r\n')"
+```
 
 `fly checks list -a my-app-porthole` shows the `/healthz` check.
 

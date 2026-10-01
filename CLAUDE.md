@@ -69,8 +69,12 @@ when a real question needs it.
 - Redaction beyond basic `Inspect` respect (planned; don't design it out)
 - Column pruning and filter pushdown (tried and removed for simplicity; revisit only if
   collection cost shows up on large nodes, and only for the expensive items like `:binary`)
-- Phase 2 of the production roadmap, remaining: a real Kubernetes deployment and Fly.io
-  (`fly proxy`, Fly's DNS) are untested (the guide says so); IPv6 distribution itself is
+- Phase 2 of the production roadmap, remaining: a real Kubernetes deployment is untested
+  (the guide says so). Fly.io is verified in production (2026-10-01, elixir_toolbox /
+  ex-tools, guides/deploy-fly.md): discovery from `ex-tools.internal` with image-id node
+  names, IPv6, `fly proxy`, a real agent querying. First-deploy lesson: a cookie copied by
+  hand differed from the app's ("Invalid challenge reply" in the app's logs); Fly secret
+  digests are value-based, so equal digests confirm equal cookies. IPv6 distribution itself is
   verified locally (2026-09-30: node named with an uncompressed IPv6 address, found via
   host and via DNS). IPv6 lessons: pass parsed addresses to `:erl_epmd.names/1` (an IPv6
   string is taken for a hostname and fails with nxdomain), try both compressed and
