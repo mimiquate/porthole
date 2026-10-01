@@ -68,59 +68,21 @@ defmodule Porthole.Tables.Processes do
 
   @impl true
   def collect(max_rows) do
-    applications = application_masters()
     # Leave out the processes doing the collection: they would otherwise
     # report their own work (e.g. as the top reductions_delta on a quiet node).
-    collectors = [self() | Process.get(:"$callers", [])]
-    {pids, truncated} = Table.take(Process.list() -- collectors, max_rows)
-
-    rows =
-      for pid <- pids, info = Process.info(pid, @items), info != nil do
-        row(pid, info |> Enum.map(&compact/1) |> Map.new(), applications)
-      end
-
-    {rows, truncated}
+    caller = List.first(Process.get(:"$callers", []), self())
+    raw = Porthole.Gather.processes(caller, @items, max_rows)
+    {shape(raw), raw.truncated}
   end
-
-  # The gathering half, for nodes without Porthole's code: Erlang that only
-  # reads, evaluated on the node by Porthole.Remote. It returns compacted
-  # process info (big lists reduced to what the columns need, as compact/1
-  # does), and the shaping half (shape/1, row/3) runs where the query runs.
-  @gather ~S"""
-  fun(Caller) ->
-    case list_to_integer(erlang:system_info(otp_release)) of
-      Otp when Otp < 27 ->
-        {old_otp, Otp};
-      _ ->
-        Me = self(),
-        Compact = fun
-          ({binary, Bins}) -> {binary_memory, lists:foldl(fun({_, Size, _}, Acc) -> Acc + Size end, 0, Bins)};
-          ({links, L}) -> {links_count, length(L)};
-          ({monitored_by, L}) -> {monitored_by_count, length(L)};
-          ({monitors, []}) -> {monitors, {0, none}};
-          ({monitors, L}) -> {monitors, {length(L), lists:last(L)}};
-          (Other) -> Other
-        end,
-        All = [P || P <- erlang:processes(), P =/= Me, P =/= Caller],
-        Masters = [{M, A} || {A, _, _} <- application:which_applications(),
-                             M <- [application_controller:get_master(A)], is_pid(M)],
-        Rows = [{P, lists:map(Compact, I)} || P <- lists:sublist(All, Max),
-                                               I <- [erlang:process_info(P, Items)], I =/= undefined],
-        #{rows => Rows, truncated => length(All) > Max, masters => Masters}
-    end
-  end
-  """
 
   @doc false
-  # Prototype: collects this table on `node` by evaluation, with no Porthole
-  # code on the node.
+  # Prototype: collects this table on `node` by evaluating Porthole.Gather's
+  # code there, with no Porthole code on the node.
   @spec collect_remote(node(), pos_integer(), pos_integer()) ::
           {:ok, {[Table.row()], boolean()}} | {:error, term()}
   def collect_remote(node, max_rows, budget) do
-    case Porthole.Remote.run(node, @gather, %{Items: @items, Max: max_rows}, budget) do
-      {:ok, {:old_otp, release}} -> {:error, {:old_otp, release}}
-      {:ok, raw} -> {:ok, {shape(raw), raw.truncated}}
-      {:error, reason} -> {:error, reason}
+    with {:ok, raw} <- Porthole.Remote.run(node, :processes, [@items, max_rows], budget) do
+      {:ok, {shape(raw), raw.truncated}}
     end
   end
 
@@ -130,14 +92,6 @@ defmodule Porthole.Tables.Processes do
     applications = Map.new(masters, fn {master, app} -> {master, Atom.to_string(app)} end)
     for {pid, info} <- rows, do: row(pid, Map.new(info), applications)
   end
-
-  # The same reductions as the evaluated gathering's Compact.
-  defp compact({:binary, bins}), do: {:binary_memory, Enum.sum_by(bins, &elem(&1, 1))}
-  defp compact({:links, links}), do: {:links_count, length(links)}
-  defp compact({:monitored_by, by}), do: {:monitored_by_count, length(by)}
-  defp compact({:monitors, []}), do: {:monitors, {0, :none}}
-  defp compact({:monitors, monitors}), do: {:monitors, {length(monitors), List.last(monitors)}}
-  defp compact(other), do: other
 
   defp row(pid, info, applications) do
     {monitors_count, last_monitor} = info.monitors
@@ -205,13 +159,4 @@ defmodule Porthole.Tables.Processes do
   end
 
   defp ancestors(_none), do: nil
-
-  # Processes started by an application have its master as group leader.
-  defp application_masters do
-    for {app, _, _} <- Application.started_applications(),
-        master = :application_controller.get_master(app),
-        is_pid(master),
-        into: %{},
-        do: {master, Atom.to_string(app)}
-  end
 end

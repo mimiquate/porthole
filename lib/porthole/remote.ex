@@ -1,16 +1,17 @@
 defmodule Porthole.Remote do
   @moduledoc """
-  Runs Porthole's collection code on a node that has no Porthole code at all.
+  Runs Porthole's collection code on a node that does not have Porthole as a
+  dependency (any Elixir app on OTP 27+).
 
-  The node evaluates a small, fixed piece of Erlang (with `:erl_eval`, part of
-  OTP itself) that only *reads*: it calls the VM's introspection functions
-  and returns the raw data. Nothing is compiled or loaded on the node, so
-  nothing is left behind, and the node only needs OTP 27+: no Porthole, not
-  even Elixir.
+  The node evaluates the compiled code of a `Porthole.Gather` function (with
+  `:erl_eval`, part of OTP itself). That code only *reads*: it calls the VM's
+  introspection functions and returns the raw data. Nothing is compiled or
+  loaded on the node, so nothing is left behind.
 
-  The code that runs is always Porthole's own, written here: agents never
-  send code, only SQL, which runs on the querying node. Evaluating it needs
-  nothing beyond the distribution cookie the querying node already holds.
+  The code that runs is always Porthole's own (`Porthole.Gather`, checked
+  when it compiles): agents never send code, only SQL, which runs on the
+  querying node. Evaluating it needs nothing beyond the distribution cookie
+  the querying node already holds.
 
   Every evaluation runs with the same safeguards as compiled collection:
 
@@ -22,45 +23,23 @@ defmodule Porthole.Remote do
     * excluding the processes doing the collection from what it sees.
   """
 
-  @typedoc "Erlang source of a fun taking the caller's pid and returning the result."
-  @type gather_source :: String.t()
-
-  # Runs the gather fun in a low-priority worker and enforces the deadline on
-  # the node. `Gather`, `Budget` and the gather fun's own bindings are bound
-  # by `run/4`.
-  @wrapper """
-  Caller = self(),
-  {Worker, Ref} = erlang:spawn_monitor(fun() ->
-      erlang:process_flag(priority, low),
-      Caller ! {porthole_result, self(), Gather(Caller)}
-    end),
-  receive
-    {porthole_result, Worker, Result} ->
-      erlang:demonitor(Ref, [flush]),
-      {ok, Result};
-    {'DOWN', Ref, process, Worker, Reason} ->
-      {error, Reason}
-  after Budget ->
-    erlang:exit(Worker, kill),
-    erlang:demonitor(Ref, [flush]),
-    {error, timeout}
-  end.
-  """
-
   @doc """
-  Evaluates `gather_source` on `node` with `bindings` (Erlang variable names
-  as atoms, e.g. `%{Max: 100}`), within `budget` milliseconds on the node.
+  Runs `Porthole.Gather.name(caller, args...)` on `node` by evaluation,
+  within `budget` milliseconds on the node (`Porthole.Gather.with_deadline/3`).
   """
-  @spec run(node(), gather_source(), map(), pos_integer()) :: {:ok, term()} | {:error, term()}
-  def run(node, gather_source, bindings, budget) do
-    exprs = parse!("Gather = " <> gather_source <> ",\n" <> @wrapper)
+  @spec run(node(), atom(), list(), pos_integer()) :: {:ok, term()} | {:error, term()}
+  def run(node, name, args, budget) do
+    # Evaluated on the node:  Run = fun ..., Gather = fun ..., Run(Gather, Args, Budget)
+    exprs = [
+      {:match, 1, {:var, 1, :Run}, Porthole.Gather.Code.fun_expr(:with_deadline, 3)},
+      {:match, 1, {:var, 1, :Gather}, Porthole.Gather.Code.fun_expr(name, length(args) + 1)},
+      {:call, 1, {:var, 1, :Run}, [{:var, 1, :Gather}, {:var, 1, :Args}, {:var, 1, :Budget}]}
+    ]
 
     bindings =
-      bindings
-      |> Map.put(:Budget, budget)
-      |> Enum.reduce(:erl_eval.new_bindings(), fn {name, value}, acc ->
-        :erl_eval.add_binding(name, value, acc)
-      end)
+      :erl_eval.new_bindings()
+      |> then(&:erl_eval.add_binding(:Args, args, &1))
+      |> then(&:erl_eval.add_binding(:Budget, budget, &1))
 
     # A little longer than the on-node deadline, so the node reports its own
     # timeout first.
@@ -69,14 +48,6 @@ defmodule Porthole.Remote do
     end
   catch
     kind, reason -> {:error, {kind, reason}}
-  end
-
-  @doc false
-  @spec parse!(String.t()) :: [tuple()]
-  def parse!(source) do
-    {:ok, tokens, _} = :erl_scan.string(String.to_charlist(source))
-    {:ok, exprs} = :erl_parse.parse_exprs(tokens)
-    exprs
   end
 
   @doc """

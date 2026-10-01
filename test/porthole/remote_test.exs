@@ -1,7 +1,7 @@
 defmodule Porthole.RemoteTest do
   @moduledoc """
-  Collection by evaluation, against a peer node that has nothing but OTP: no
-  Porthole and no Elixir on its code path.
+  Collection by evaluation, against a peer node like an ordinary Elixir app
+  that does not depend on Porthole: Elixir on its code path, no Porthole.
   """
   use ExUnit.Case, async: false
 
@@ -17,8 +17,14 @@ defmodule Porthole.RemoteTest do
         })
     end
 
-    # No -pa arguments: the peer only has OTP's own libraries.
-    {:ok, peer, node} = :peer.start(%{name: :peer.random_name()})
+    # Only Elixir's own libraries on the peer's code path, not Porthole's.
+    elixir_paths =
+      for path <- :code.get_path(), to_string(path) =~ ~r{/elixir/ebin$|/logger/ebin$}, do: path
+
+    {:ok, peer, node} =
+      :peer.start(%{name: :peer.random_name(), args: Enum.flat_map(elixir_paths, &[~c"-pa", &1])})
+
+    {:ok, _} = :erpc.call(node, :application, :ensure_all_started, [:elixir])
     on_exit(fn -> :peer.stop(peer) end)
 
     probe = :erpc.call(node, :erlang, :spawn, [:timer, :sleep, [:infinity]])
@@ -26,12 +32,16 @@ defmodule Porthole.RemoteTest do
     %{node: node, probe: probe}
   end
 
-  test "the peer has no Porthole and no Elixir", %{node: node} do
-    refute :erpc.call(node, :code, :is_loaded, [:elixir])
-    assert :erpc.call(node, :code, :which, [Porthole.Collector]) == :non_existing
+  test "the peer has Elixir but no Porthole", %{node: node} do
+    # Available (modules load on first use, so "loaded" would depend on order).
+    assert :erpc.call(node, :code, :which, [Enum]) != :non_existing
+
+    for module <- [Porthole.Gather, Porthole.Collector] do
+      assert :erpc.call(node, :code, :which, [module]) == :non_existing
+    end
   end
 
-  test "collects processes from a node with nothing but OTP", %{node: node, probe: probe} do
+  test "collects processes from a node without Porthole", %{node: node, probe: probe} do
     assert {:ok, {rows, false}} = Processes.collect_remote(node, 50_000, 5_000)
 
     assert %{pid: pid, registered_name: "probe_proc", current_function: ":timer.sleep/1"} =
@@ -49,7 +59,7 @@ defmodule Porthole.RemoteTest do
     assert %{application: "kernel"} = Enum.find(rows, &(&1.registered_name == "code_server"))
 
     # Nothing was left loaded on the node.
-    refute :erpc.call(node, :code, :is_loaded, [:elixir])
+    refute :erpc.call(node, :code, :is_loaded, [Porthole.Gather])
   end
 
   test "the collecting processes are not in the results", %{node: node} do
