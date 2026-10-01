@@ -8,7 +8,7 @@ defmodule Porthole.Tables.Processes do
 
   @behaviour Porthole.Table
 
-  alias Porthole.{Table, Term}
+  alias Porthole.{Remote, Table, Term}
 
   @items [
     :registered_name,
@@ -76,32 +76,98 @@ defmodule Porthole.Tables.Processes do
 
     rows =
       for pid <- pids, info = Process.info(pid, @items), info != nil do
-        row(pid, Map.new(info), applications)
+        row(pid, info |> Enum.map(&compact/1) |> Map.new(), applications)
       end
 
     {rows, truncated}
   end
 
+  # The gathering half, for nodes without Porthole's code: Erlang that only
+  # reads, evaluated on the node by Porthole.Remote. It returns compacted
+  # process info (big lists reduced to what the columns need, as compact/1
+  # does), and the shaping half (shape/1, row/3) runs where the query runs.
+  @gather ~S"""
+  fun(Caller) ->
+    case list_to_integer(erlang:system_info(otp_release)) of
+      Otp when Otp < 27 ->
+        {old_otp, Otp};
+      _ ->
+        Me = self(),
+        Compact = fun
+          ({binary, Bins}) -> {binary_memory, lists:foldl(fun({_, Size, _}, Acc) -> Acc + Size end, 0, Bins)};
+          ({links, L}) -> {links_count, length(L)};
+          ({monitored_by, L}) -> {monitored_by_count, length(L)};
+          ({monitors, []}) -> {monitors, {0, none}};
+          ({monitors, L}) -> {monitors, {length(L), lists:last(L)}};
+          (Other) -> Other
+        end,
+        All = [P || P <- erlang:processes(), P =/= Me, P =/= Caller],
+        Masters = [{M, A} || {A, _, _} <- application:which_applications(),
+                             M <- [application_controller:get_master(A)], is_pid(M)],
+        Rows = [{P, lists:map(Compact, I)} || P <- lists:sublist(All, Max),
+                                               I <- [erlang:process_info(P, Items)], I =/= undefined],
+        #{rows => Rows, truncated => length(All) > Max, masters => Masters}
+    end
+  end
+  """
+
+  @doc false
+  # Prototype: collects this table on `node` by evaluation, with no Porthole
+  # code on the node.
+  @spec collect_remote(node(), pos_integer(), pos_integer()) ::
+          {:ok, {[Table.row()], boolean()}} | {:error, term()}
+  def collect_remote(node, max_rows, budget) do
+    case Porthole.Remote.run(node, @gather, %{Items: @items, Max: max_rows}, budget) do
+      {:ok, {:old_otp, release}} -> {:error, {:old_otp, release}}
+      {:ok, raw} -> {:ok, {shape(raw), raw.truncated}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc false
+  @spec shape(map()) :: [Table.row()]
+  def shape(%{rows: rows, masters: masters}) do
+    applications = Map.new(masters, fn {master, app} -> {master, Atom.to_string(app)} end)
+    for {pid, info} <- rows, do: row(pid, Map.new(info), applications)
+  end
+
+  # The same reductions as the evaluated gathering's Compact.
+  defp compact({:binary, bins}), do: {:binary_memory, Enum.sum_by(bins, &elem(&1, 1))}
+  defp compact({:links, links}), do: {:links_count, length(links)}
+  defp compact({:monitored_by, by}), do: {:monitored_by_count, length(by)}
+  defp compact({:monitors, []}), do: {:monitors, {0, :none}}
+  defp compact({:monitors, monitors}), do: {:monitors, {length(monitors), List.last(monitors)}}
+  defp compact(other), do: other
+
   defp row(pid, info, applications) do
+    {monitors_count, last_monitor} = info.monitors
+
     %{
-      pid: inspect(pid),
+      pid: Remote.pid(pid),
       registered_name:
         if(info.registered_name == [], do: nil, else: Term.name(info.registered_name)),
       initial_call: initial_call(info[{:dictionary, :"$initial_call"}], info.initial_call),
       current_function: Term.mfa(info.current_function),
-      waiting_on: waiting_on(info.current_function, info.monitors),
+      waiting_on: waiting_on(info.current_function, last_monitor),
       label: label(info[{:dictionary, :"$process_label"}]),
-      application: applications[info.group_leader],
+      application: application(applications, info.group_leader),
       ancestors: ancestors(info[{:dictionary, :"$ancestors"}]),
       status: Atom.to_string(info.status),
       message_queue_len: info.message_queue_len,
       memory: info.memory,
-      binary_memory: Enum.sum_by(info.binary, &elem(&1, 1)),
+      binary_memory: info.binary_memory,
       reductions: info.reductions,
-      links_count: length(info.links),
-      monitors_count: length(info.monitors),
-      monitored_by_count: length(info.monitored_by)
+      links_count: info.links_count,
+      monitors_count: monitors_count,
+      monitored_by_count: info.monitored_by_count
     }
+  end
+
+  defp application(applications, group_leader) do
+    case applications do
+      %{^group_leader => app} -> app
+      %{} -> nil
+    end
   end
 
   # Like :proc_lib.translate_initial_call/1: OTP behaviours record their
@@ -117,15 +183,15 @@ defmodule Porthole.Tables.Processes do
   # not documented, so this relies on observed VM behavior.
   @blocking_calls [{:gen, :do_call, 4}, {Task, :await_receive, 3}]
 
-  defp waiting_on(current, [_ | _] = monitors) when current in @blocking_calls do
-    case List.last(monitors) do
-      {:process, pid} when is_pid(pid) -> inspect(pid)
+  defp waiting_on(current, last_monitor) when current in @blocking_calls do
+    case last_monitor do
+      {:process, pid} when is_pid(pid) -> Remote.pid(pid)
       {:process, {name, node}} -> "#{Term.name(name)}@#{node}"
-      _port -> nil
+      _port_or_none -> nil
     end
   end
 
-  defp waiting_on(_current, _monitors), do: nil
+  defp waiting_on(_current, _last_monitor), do: nil
 
   defp label(:undefined), do: nil
   defp label(label), do: Term.render(label)
@@ -133,7 +199,8 @@ defmodule Porthole.Tables.Processes do
   defp ancestors([_ | _] = ancestors) do
     Enum.map_join(ancestors, ",", fn
       name when is_atom(name) -> Term.name(name)
-      pid -> inspect(pid)
+      pid when is_pid(pid) -> Remote.pid(pid)
+      other -> inspect(other)
     end)
   end
 
