@@ -3,7 +3,73 @@
 This guide deploys the Porthole sidecar next to an app running on Fly.io, so
 agents can query the app's live cluster without ever holding its cookie.
 [Setting up your team](team-setup.md#production) explains the why; this is
-the how, command by command.
+the how.
+
+There are two ways. Both leave your app as it is: it needs no Porthole
+dependency and is not redeployed.
+
+- **[Try it](#try-it-two-commands):** one command sets everything up, one
+  removes it. Best for a first look at production.
+- **[Set it up to stay](#set-it-up-to-stay):** the same sidecar, with
+  every step in your hands, for a team that keeps using it.
+
+## Try it: two commands
+
+> **Status:** new. Verified end to end against releases in Docker, with a
+> stand-in for `fly`; not yet run on Fly.io itself. Please open an issue if
+> a step fails.
+
+From a checkout of this repository, with `fly` logged in:
+
+```console
+$ mix porthole.fly.up my-app
+```
+
+It creates a separate Fly app, `my-app-porthole`, in your app's organization
+and region, then:
+
+1. reads your app's cookie from its running release (with `fly ssh
+   console`) and stores it as the sidecar's secret. It is never printed,
+   and the agent never gets it;
+2. generates a token for you;
+3. deploys the sidecar and checks that it sees your app's nodes;
+4. prints the two commands that remain: the tunnel and the agent.
+
+```text
+my-app-porthole observes 2 node(s) of my-app: my-app-01J8X…@fdaa:0:…:2, my-app-01J8X…@fdaa:0:…:3
+
+Open the tunnel, and keep it running while the agent works:
+
+    fly proxy 4040:4040 -a my-app-porthole
+
+Connect your agent, e.g. Claude Code (this token is shown only once):
+
+    claude mcp add --transport http my-app-porthole http://localhost:4040/ --header "Authorization: Bearer ph_…"
+```
+
+When you are done:
+
+```console
+$ mix porthole.fly.down my-app
+$ claude mcp remove my-app-porthole
+```
+
+`down` destroys the sidecar app, with its secrets and tokens, and refuses to
+destroy anything that is not a Porthole sidecar.
+
+What your app needs: an Elixir release on OTP 27+, distributed with long
+names over IPv6, which is how `fly launch` sets up Phoenix apps
+(`RELEASE_DISTRIBUTION=name` and `ERL_AFLAGS="-proto_dist inet6_tcp"` in
+`rel/env.sh.eex`). `up` checks this and says what is missing.
+
+Running `up` again updates the same sidecar and issues a new token (the
+previous one stops working). If your app has no `RELEASE_COOKIE` secret,
+its cookie is generated when it is built and changes on every deploy, so
+the sidecar loses access after your next deploy: run `up` again. `up` tells
+you when this applies. To keep the sidecar, give your app a fixed cookie and
+follow the next section.
+
+## Set it up to stay
 
 Responsibilities are split explicitly:
 
@@ -19,7 +85,7 @@ Responsibilities are split explicitly:
 > through `fly proxy`. If a step does not behave as described, please open
 > an issue.
 
-## Values you need
+### Values you need
 
 The commands use these placeholders. Replace them with your own values:
 
@@ -28,10 +94,10 @@ The commands use these placeholders. Replace them with your own values:
 | `my-app-porthole` | `shop-porthole` | A name for the sidecar's Fly app |
 | `ewr` | `ewr` | A Fly region, usually your app's (`primary_region` in its `fly.toml`) |
 | `my-app.internal` | `shop.internal` | Your app's `DNS_CLUSTER_QUERY` (Phoenix apps on Fly: `<fly app>.internal`) |
-| `1.18.4`, `28.1` | `1.18.4`, `28.1` | Your app's Elixir and OTP (its `.tool-versions` or Dockerfile) |
+| `1.18.4`, `28.1` | `1.18.4`, `28.1` | The sidecar's Elixir and OTP. Any OTP 27+ works with apps on OTP 27 to 29 (tested); your app's versions are a safe choice |
 | `bookworm-20260610-slim` | `bookworm-20260610-slim` | A Debian tag that, with the two versions, forms an existing [`hexpm/elixir` image tag](https://hub.docker.com/r/hexpm/elixir/tags) |
 
-## Before you start
+### Before you start
 
 1. **Your app uses a fixed cookie,** set as a `RELEASE_COOKIE` Fly secret.
    Without one, `mix release` generates a new cookie on every build and the
@@ -44,7 +110,7 @@ The commands use these placeholders. Replace them with your own values:
 3. **`fly` is installed and logged in** to the organization that owns your
    app.
 
-## 1. Create the sidecar app and its secrets
+### 1. Create the sidecar app and its secrets
 
 ```console
 $ fly apps create my-app-porthole       # in the same organization as your app
@@ -65,7 +131,7 @@ $ unset RELEASE_COOKIE
 
 `--stage` stores the secrets without deploying; the next step deploys.
 
-## 2. Deploy
+### 2. Deploy
 
 ```console
 $ fly deploy . \
@@ -87,13 +153,13 @@ $ fly deploy . \
 | `--dockerfile sidecar/Dockerfile` | The sidecar image |
 | `--app`, `--primary-region` | Your sidecar app and its region |
 | `--ha=false` | One machine: the sidecar holds no state, and a second one adds nothing |
-| `--build-arg …` | Builds the image for your app's Elixir/OTP |
+| `--build-arg …` | The sidecar's Elixir/OTP |
 | `--env DNS_CLUSTER_QUERY=…` | How the sidecar finds your app's nodes |
 
 Every later deploy (after a Porthole upgrade, for instance) is the same
 command, with the same values.
 
-## 3. Check it
+### 3. Check it
 
 ```console
 $ fly logs -a my-app-porthole
@@ -133,7 +199,7 @@ $ fly secrets set -a my-app-porthole \
 
 `fly checks list -a my-app-porthole` shows the `/healthz` check.
 
-## 4. Connect an agent
+### 4. Connect an agent
 
 Open a tunnel to the sidecar (nothing is exposed publicly) and keep it
 running while the agent works:
@@ -156,7 +222,7 @@ run on each node, and what uses the most memory?"*
 Every query is recorded in the sidecar's logs (`porthole.audit` lines): who
 asked, what, and the outcome.
 
-## Day to day
+### Day to day
 
 | Task | How |
 |---|---|

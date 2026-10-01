@@ -86,6 +86,9 @@ WHERE links_count = 0 AND monitors_count = 0 AND monitored_by_count = 0
   teams use it in, with the queries and workflows for each.
 - [Query cookbook](guides/cookbook.md): copy-paste queries by question, all
   tested against a live demo system.
+- [Deploying the sidecar on Fly.io](guides/deploy-fly.md): try it on a
+  production app with `mix porthole.fly.up my-app` (no change to the app),
+  remove it with `mix porthole.fly.down my-app`, or set it up to stay.
 - [Setting up your team](guides/team-setup.md): development and production
   setup, agent instructions, policy, audit, and the trust boundary.
 - [Evals](evals/README.md): reproducible runs of an agent with Porthole

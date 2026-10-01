@@ -34,8 +34,8 @@ defmodule Porthole.MixProject do
 
   defp deps do
     [
-      # Only the querying node needs the SQLite NIF. Nodes that are merely
-      # observed only need the pure-Elixir collectors, so this is optional.
+      # Only the querying node needs the SQLite NIF (observed nodes need
+      # nothing from Porthole), so this is optional.
       {:exqlite, "~> 0.41", optional: true},
       # Only the sidecar serving MCP over HTTP needs a web server. The ranges are
       # deliberately wide: apps that already use Plug or Bandit must not be

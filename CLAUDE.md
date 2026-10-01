@@ -53,6 +53,15 @@ when a real question needs it.
     (loopback-only, rejects proxied requests and browsers; never in production)
   - `mix porthole.doctor` (`Porthole.Doctor`): per-node reachability, Elixir, OTP,
     latency and a real collection, with what to fix; `GET /healthz` on the HTTP plug
+- **`mix porthole.fly.up APP` / `fly.down APP`** (`Porthole.Fly`): a zero-change production
+  trial on Fly.io. `up` reads the running release's cookie and distribution settings from
+  `/proc/<beam>/environ` over `fly ssh console` (works for generated per-build cookies too),
+  imports it as the sidecar's secret via stdin (never printed, never in argv), generates a
+  token, deploys the sidecar from the checkout (or `--image`), checks through a temporary
+  `fly proxy` that nodes are observed, and prints the tunnel + `claude mcp add` commands.
+  `down` destroys only apps that are Porthole sidecars (`PORTHOLE_PORT` in their config).
+  `PORTHOLE_FLY` overrides the `fly` executable (tests use a fake). Verified end to end with a
+  Docker-backed fake `fly` (2026-10-01); not yet run on real Fly.
 - **`sidecar/`**: a separate Mix project (depends on the library by path) that packages the
   production sidecar as a release and Docker image, configured only by env vars
   (`PortholeSidecar.Config`), tracking the cluster every 5s (seeds, their peers, DNS
@@ -80,10 +89,10 @@ when a real question needs it.
   string is taken for a hostname and fails with nxdomain), try both compressed and
   uncompressed spellings of IPv6 node names, and prefer the DNS address family of the
   sidecar's own distribution; more client snippets. Sidecar and app are upgraded
-  independently since collection by evaluation (no Porthole on observed nodes). Next:
-  `up`/`down` commands for a zero-redeploy production trial on Fly (fetch the cookie from
-  the app without displaying it, token, prebuilt sidecar image, tunnel; `down` destroys
-  it). The Docker image is
+  independently since collection by evaluation (no Porthole on observed nodes); an OTP 27
+  sidecar observes OTP 27–29 apps and vice versa (tested 2026-10-01), so one prebuilt image
+  can serve everyone. Next: publish a prebuilt sidecar image (so `fly.up` skips the build),
+  run `fly.up` on real Fly, then similar commands for other platforms. The Docker image is
   verified (2026-09-28): compose with an app on long names and a fixed cookie, discovery
   from DNS_CLUSTER_QUERY, scaling 1→2→1, wrong cookie, missing config, non-root user.
   The builder image tag must exist on Docker Hub (hexpm/elixir tags carry a Debian date). Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package

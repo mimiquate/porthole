@@ -4,9 +4,10 @@
 #
 #   docker build -f sidecar/Dockerfile -t porthole-sidecar .
 #
-# Match ELIXIR_VERSION/OTP_VERSION to your cluster's major OTP version. The
-# three must form an existing hexpm/elixir tag (they carry a Debian build
-# date): see https://hub.docker.com/r/hexpm/elixir/tags
+# ELIXIR_VERSION/OTP_VERSION need not match your cluster's: an OTP 27 image
+# observes apps on OTP 27 to 29 (tested). The three must form an existing
+# hexpm/elixir tag (they carry a Debian build date): see
+# https://hub.docker.com/r/hexpm/elixir/tags
 
 ARG ELIXIR_VERSION=1.18.3
 ARG OTP_VERSION=27.3.3
