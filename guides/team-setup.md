@@ -308,6 +308,9 @@ which nodes it observes, which it cannot connect to, and when it finds none.
 Remote consoles and `rpc` calls (`rem-*`, `rpc-*` nodes) are never observed. `GET /healthz` answers `200 ok`
 for liveness checks, and `mix porthole.doctor` checks each node in detail.
 
+**Fly.io.** [Deploying the sidecar on Fly.io](deploy-fly.md) has the exact
+commands, from creating the app to connecting an agent.
+
 **Docker.** Build from the repository root:
 
 ```console

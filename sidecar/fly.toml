@@ -1,0 +1,28 @@
+# Fly.io config for the Porthole sidecar. It is generic: everything specific
+# to your app (the Fly app name, region, the DNS name your app clusters with,
+# Elixir/OTP versions) is passed as `fly deploy` flags. See
+# guides/deploy-fly.md.
+#
+# The sidecar has no public service: agents reach it through `fly proxy`.
+
+[env]
+  # Fly's private network is IPv6: distribution and the HTTP listener both
+  # need it (0.0.0.0 would not be reachable through `fly proxy`).
+  ERL_AFLAGS = "-proto_dist inet6_tcp"
+  PORTHOLE_BIND = "::"
+  PORTHOLE_PORT = "4040"
+  # Secrets, set with `fly secrets set`, never here: RELEASE_COOKIE (the same
+  # value as your app's) and PORTHOLE_TOKENS.
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory = "256mb"
+
+[checks]
+  [checks.healthz]
+    type = "http"
+    port = 4040
+    path = "/healthz"
+    interval = "30s"
+    timeout = "5s"

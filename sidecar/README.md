@@ -21,5 +21,6 @@ $ docker build -f sidecar/Dockerfile -t porthole-sidecar .
 ```
 
 All variables, the Docker and Kubernetes setups, tokens and policies are in
-[Setting up your team](../guides/team-setup.md#production). The variables are
+[Setting up your team](../guides/team-setup.md#production). On Fly.io, use
+`fly.toml` here and follow [Deploying the sidecar on Fly.io](../guides/deploy-fly.md). The variables are
 also documented in `PortholeSidecar.Config`.

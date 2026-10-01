@@ -64,6 +64,7 @@ defmodule Porthole.MixProject do
         "guides/use-cases.md",
         "guides/cookbook.md",
         "guides/team-setup.md",
+        "guides/deploy-fly.md",
         "evals/README.md": [title: "Evals", filename: "evals"],
         "evals/2026-09-shop-blind.md": [title: "Eval: shop, blind (2026-09)"],
         "evals/2026-09-shop-docker-multinode.md": [
