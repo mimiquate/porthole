@@ -12,9 +12,11 @@ defmodule Porthole.Gather do
   rules, **checked when this module compiles** (a violation fails the build):
 
     * **Calls only OTP modules** (`:erlang`, `:lists`, ...), plus
-      `Enum.reduce/3`, which `for` comprehensions compile to and which has
-      existed since Elixir 1.0. The node may run another Elixir version than
-      the querying node, so newer Elixir functions might not exist there.
+      `Enum.reduce/3`, which `for` comprehensions with a filter compile to
+      and which has existed since Elixir 1.0 (a `for` without a filter
+      compiles to `Enum.map/2`: use `:lists.map/2`). The node may run another
+      Elixir version than the querying node, so newer Elixir functions might
+      not exist there.
     * **No calls to other functions of this module**: an evaluated function
       cannot see its siblings. Helpers are anonymous functions instead.
 
@@ -163,6 +165,86 @@ defmodule Porthole.Gather do
           do: {pid, module, name, child}
 
     %{rows: :lists.sublist(rows, max), truncated: :erlang.length(rows) > max}
+  end
+
+  @doc """
+  Like `supervisors/3`, but walking the applications' supervision trees
+  instead of every process: from each application's top supervisor down
+  through children of type `:supervisor`. Its cost depends on the number of
+  supervisors, not of processes, so it stays fast on large or busy nodes.
+  It misses supervisors started outside any application's tree.
+  """
+  @spec supervision_trees(pid(), pos_integer(), timeout()) :: map()
+  def supervision_trees(_caller, max, call_timeout) do
+    # {pid, module, registered name} if pid is a supervisor. Only processes
+    # recognized this way are sent which_children.
+    supervisor = fn pid ->
+      case :erlang.process_info(pid, [{:dictionary, :"$initial_call"}, :registered_name]) do
+        [{_, {:supervisor, module, _}}, {_, name}] -> {pid, module, name}
+        _other -> nil
+      end
+    end
+
+    linked = fn pid ->
+      case :erlang.process_info(pid, :links) do
+        {:links, links} -> for link <- links, :erlang.is_pid(link), do: link
+        :undefined -> []
+      end
+    end
+
+    # gen_server calls use aliases, so a late reply is dropped instead of
+    # landing in this process's mailbox.
+    children = fn pid ->
+      try do
+        :gen_server.call(pid, :which_children, call_timeout)
+      catch
+        :exit, _ -> [:unreachable]
+      end
+    end
+
+    # An application master is linked to a helper process, which is linked
+    # to the application's top supervisor.
+    roots =
+      for {app, _description, _vsn} <- :application.which_applications(),
+          master = :application_controller.get_master(app),
+          :erlang.is_pid(master),
+          helper <- linked.(master),
+          pid <- linked.(helper),
+          root = supervisor.(pid),
+          root != nil,
+          do: root
+
+    # Breadth first, each supervisor once, until more than `max` rows.
+    walk = fn
+      _walk, _queue, _seen, rows, count when count > max ->
+        {rows, count}
+
+      _walk, [], _seen, rows, count ->
+        {rows, count}
+
+      walk, [{pid, module, name} | queue], seen, rows, count ->
+        case :maps.is_key(pid, seen) do
+          true ->
+            walk.(walk, queue, seen, rows, count)
+
+          false ->
+            kids = children.(pid)
+
+            next =
+              for {_id, child, :supervisor, _modules} <- kids,
+                  :erlang.is_pid(child),
+                  sub = supervisor.(child),
+                  sub != nil,
+                  do: sub
+
+            own = :lists.map(fn kid -> {pid, module, name, kid} end, kids)
+            seen = :maps.put(pid, true, seen)
+            walk.(walk, queue ++ next, seen, :lists.reverse(own, rows), count + length(kids))
+        end
+    end
+
+    {rows, count} = walk.(walk, roots, %{}, [], 0)
+    %{rows: :lists.sublist(:lists.reverse(rows), max), truncated: count > max}
   end
 
   @doc "`:ets.info/1` of every ETS table (metadata only), at most `max`."

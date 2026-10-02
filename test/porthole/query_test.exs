@@ -98,7 +98,13 @@ defmodule Porthole.QueryTest do
       end)
 
     Process.sleep(10)
-    assert {:ok, result} = Porthole.query("SELECT count(*) FROM supervisors", timeout_ms: 200)
+
+    assert {:ok, result} =
+             Porthole.query("SELECT count(*) FROM supervisors",
+               timeout_ms: 200,
+               all_supervisors: true
+             )
+
     assert [%{message: message}] = result.errors
     assert message =~ "took longer than 200ms and was stopped on this node"
 
@@ -152,7 +158,8 @@ defmodule Porthole.QueryTest do
              [["{:job, 42}"]]
 
     assert Porthole.query!(
-             "SELECT child_status FROM supervisors WHERE pid = '#{inspect(fake_supervisor)}'"
+             "SELECT child_status FROM supervisors WHERE pid = '#{inspect(fake_supervisor)}'",
+             all_supervisors: true
            ).rows ==
              [["unreachable"]]
   end

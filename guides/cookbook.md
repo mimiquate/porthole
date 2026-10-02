@@ -181,6 +181,11 @@ SELECT node, path AS cycle FROM chain WHERE pid = start;
 
 ## Supervision
 
+`supervisors` covers your applications' supervision trees, which is fast on
+any node. A supervisor started outside them (from a plain process, for
+instance) is only found with the `all_supervisors` option, which scans every
+process and is slow on large or overloaded nodes.
+
 The supervision tree under one supervisor:
 
 ```sql

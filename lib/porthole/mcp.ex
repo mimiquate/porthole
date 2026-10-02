@@ -92,7 +92,11 @@ defmodule Porthole.MCP do
   defp request("tools/call", %{"name" => "query", "arguments" => %{"sql" => sql} = args}, context)
        when is_binary(sql) do
     request_opts =
-      for {key, value} <- [window_ms: args["window_ms"], nodes: args["nodes"]],
+      for {key, value} <- [
+            window_ms: args["window_ms"],
+            nodes: args["nodes"],
+            all_supervisors: args["all_supervisors"]
+          ],
           value != nil,
           do: {key, value}
 
@@ -133,6 +137,13 @@ defmodule Porthole.MCP do
             type: "array",
             items: %{type: "string"},
             description: "Nodes to query. Default: the target node."
+          },
+          all_supervisors: %{
+            type: "boolean",
+            description:
+              "supervisors table: scan every process instead of the applications' " <>
+                "supervision trees, to also find supervisors outside them. Slow on large " <>
+                "or overloaded nodes. Default false."
           }
         },
         required: ["sql"]

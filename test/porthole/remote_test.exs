@@ -143,6 +143,14 @@ defmodule Porthole.RemoteTest do
 
     assert {rows, _} = tables["supervisors"]
     assert Enum.any?(rows, &(&1.name == "kernel_sup"))
+
+    # The full scan too.
+    limits = Map.put(limits, :all_supervisors, true)
+
+    assert {%{^node => %{"supervisors" => {all, false}}}, []} =
+             Collector.collect([node], ["supervisors"], nil, limits, 5_000)
+
+    assert MapSet.subset?(MapSet.new(rows), MapSet.new(all))
   end
 
   test "sampling windows work on a node without Porthole", %{node: node} do

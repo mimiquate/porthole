@@ -2,6 +2,13 @@ defmodule Porthole.Tables.Supervisors do
   @moduledoc """
   One row per supervisor child.
 
+  Supervisors are found by walking each application's supervision tree,
+  from its top supervisor down, so the cost depends on the number of
+  supervisors rather than processes. With the `all_supervisors` query
+  option, every process is scanned instead, which also finds supervisors
+  started outside any application's tree, at a cost proportional to the
+  number of processes (slow on large or overloaded nodes).
+
   Supervisors are recognized by `$initial_call` (this covers `Supervisor`,
   `DynamicSupervisor`, `Task.Supervisor` and `:supervisor`), and asked for
   `which_children` with a short timeout, as `:observer` does. A supervisor
@@ -22,7 +29,10 @@ defmodule Porthole.Tables.Supervisors do
 
   @impl true
   def description,
-    do: "One row per supervisor child: supervisor pid/name, child id/pid/type/status."
+    do:
+      "One row per supervisor child: supervisor pid/name, child id/pid/type/status. " <>
+        "Covers the applications' supervision trees; pass all_supervisors to also find " <>
+        "supervisors outside them (slower)."
 
   @impl true
   def key, do: :pid
@@ -45,7 +55,10 @@ defmodule Porthole.Tables.Supervisors do
   end
 
   @impl true
-  def gather(limits), do: {:supervisors, [limits.max_rows, limits.call_timeout]}
+  def gather(limits) do
+    name = if Map.get(limits, :all_supervisors), do: :supervisors, else: :supervision_trees
+    {name, [limits.max_rows, limits.call_timeout]}
+  end
 
   @impl true
   def shape(%{rows: rows, truncated: truncated}) do

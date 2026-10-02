@@ -21,7 +21,11 @@ defmodule Porthole.Table do
   @type row :: %{atom() => String.t() | integer() | boolean() | nil}
 
   @typedoc "Collection limits for one table on one node."
-  @type limits :: %{max_rows: pos_integer(), call_timeout: timeout()}
+  @type limits :: %{
+          required(:max_rows) => pos_integer(),
+          required(:call_timeout) => timeout(),
+          optional(:all_supervisors) => boolean()
+        }
 
   @callback name() :: String.t()
   @callback description() :: String.t()

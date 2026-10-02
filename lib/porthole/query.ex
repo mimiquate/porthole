@@ -49,6 +49,10 @@ defmodule Porthole.Query do
       to `:max_concurrent`. See `Porthole.Limiter`.
     * `:max_result_rows`, `:max_rows`, `:timeout_ms` - narrow the policy for
       this request.
+    * `:all_supervisors` - find supervisors by scanning every process,
+      instead of walking the applications' supervision trees. Also finds
+      supervisors outside those trees, at a cost proportional to the number
+      of processes. Default `false`.
   """
   @spec run(String.t(), keyword()) :: {:ok, Result.t()} | {:error, Error.t()}
   def run(sql, opts \\ []) do
@@ -78,17 +82,23 @@ defmodule Porthole.Query do
          :ok <- Policy.authorize_nodes(policy, nodes),
          {:ok, ticket} <- Limiter.acquire(opts[:client], policy) do
       try do
-        run_admitted(sql, nodes, window, policy)
+        run_admitted(sql, nodes, window, policy, opts[:all_supervisors] == true)
       after
         Limiter.release(ticket)
       end
     end
   end
 
-  defp run_admitted(sql, nodes, window, policy) do
+  defp run_admitted(sql, nodes, window, policy, all_supervisors) do
     tables = for table <- Table.all(), sql =~ ~r/\b#{table.name()}\b/i, do: table
     names = Enum.map(tables, & &1.name())
-    limits = %{max_rows: policy.max_rows, max_bytes: policy.max_bytes}
+
+    limits = %{
+      max_rows: policy.max_rows,
+      max_bytes: policy.max_bytes,
+      all_supervisors: all_supervisors
+    }
+
     {collected, errors} = Collector.collect(nodes, names, window, limits, policy.timeout_ms)
 
     with {:ok, columns, rows, more?} <- execute(sql, tables, collected, window, policy) do

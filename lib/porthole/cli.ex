@@ -7,6 +7,8 @@ defmodule Porthole.CLI do
       here; the target needs nothing from Porthole (Elixir on OTP 27+).
     * `--node NODE` (repeatable) / `--all-nodes` - nodes to query.
     * `--window MS` - sampling window.
+    * `--all-supervisors` - find supervisors by scanning every process (see
+      `Porthole.Query.run/2`).
     * `--demo` - start the demo app (a small shop with planted problems) first
       (dev only, without `--connect`).
   """
@@ -17,6 +19,7 @@ defmodule Porthole.CLI do
     node: :keep,
     all_nodes: :boolean,
     window: :integer,
+    all_supervisors: :boolean,
     demo: :boolean
   ]
 
@@ -47,7 +50,8 @@ defmodule Porthole.CLI do
         true -> nil
       end
 
-    {[nodes: nodes, window_ms: opts[:window]], rest, opts}
+    {[nodes: nodes, window_ms: opts[:window], all_supervisors: opts[:all_supervisors]], rest,
+     opts}
   end
 
   defp connect!(target, cookie) do

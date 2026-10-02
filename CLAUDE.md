@@ -187,6 +187,13 @@ looking, answers are exact "now", no state. History is out of scope.
   slots, and it only starts where SQLite is available: observed nodes run no Porthole
   processes (tested), and don't need Porthole at all.
 - The snapshot is **not atomic**, since processes change during the walk. Document this.
+- Measured under CPU saturation (2026-10-02, laptop, 8 schedulers, 16 busy loops): the
+  `processes` walk is ~30–50× slower than idle at low priority (10k processes: 0.34 s →
+  16 s; 100k: 4.3 s → ~120 s), so it times out at the default 10 s on saturated nodes;
+  `system` and `ets_tables` stay in milliseconds. Collecting did not measurably affect app
+  latency. Normal priority was tried and rejected: only 3–5× faster (100k still 20–38 s)
+  and it caused 180–300 ms stalls in app processes. Reduce work instead of raising
+  priority.
 
 ### Trust boundary (important)
 
@@ -241,8 +248,15 @@ into the MCP tool description, so keep them short and useful to an agent.
     that is its most recent (last) monitor. Relies on undocumented VM ordering; best effort.
   - `application` is derived from the group leader (application master).
 - `supervisors`: one row per child: pid, name, module, child_id, child_pid, child_status,
-  child_type. Found via `$initial_call` (covers Supervisor, DynamicSupervisor,
-  Task.Supervisor); `which_children` with a 1s timeout, `unreachable` if no answer. No
+  child_type. Found by walking each application's supervision tree (application master →
+  its helper process → top supervisor, then children of type supervisor), so the cost
+  depends on the number of supervisors, not processes (100k processes, saturated node:
+  0.2–0.6 s vs 82 s for a full scan; measured 2026-10-02). The `all_supervisors` query
+  option (MCP argument, `--all-supervisors`) scans every process instead, which also finds
+  supervisors outside any application tree. Both recognize supervisors by `$initial_call`
+  (Supervisor, DynamicSupervisor, Task.Supervisor) and only call those: a child declared
+  `type: :supervisor` that is not one is never sent `which_children` (it would crash it;
+  tested). `which_children` with a 1s timeout, `unreachable` if no answer. No
   strategy or restart counts: those need `:sys.get_state` (evaluate tier). Restart loops
   are detected via the supervisor's `reductions_delta`.
 - `ets_tables`: id, name, owner, type, protection, size, memory. Deltas: size, memory.

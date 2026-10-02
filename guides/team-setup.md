@@ -492,6 +492,26 @@ On each observed node, collection:
 Across the cluster, `max_concurrent` and `queries_per_minute` bound how much
 collection agents can trigger.
 
+**When a node is overloaded.** Low priority means Porthole only uses spare
+CPU, so on a node whose schedulers are saturated, large tables take much
+longer. In our measurements (a laptop with 8 schedulers, every scheduler
+kept busy):
+
+| Table | Idle | Saturated |
+|---|---|---|
+| `system`, `ets_tables` | milliseconds | milliseconds |
+| `supervisors` (100k processes) | 55 ms | 0.2–0.6 s |
+| `processes`, 10k processes | 0.3 s | 16 s |
+| `processes`, 100k processes | 4 s | ~2 min |
+
+With the default 10 s deadline, `processes` therefore times out on a
+saturated node with more than a few thousand processes: the query returns
+an error for that node (the others still answer) and nothing keeps running
+there. Start with `system`, whose `run_queue` shows the saturation itself,
+and compare nodes: an overloaded node next to healthy ones is often the
+answer. Collecting did not measurably slow the application in these
+measurements, idle or saturated.
+
 ## The human side
 
 Porthole changes what the agent can see, not who is responsible. Teams that

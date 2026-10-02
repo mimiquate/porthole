@@ -26,7 +26,11 @@ defmodule Porthole.Collector do
   @type tables :: %{String.t() => {[Table.row()], truncated :: false | :rows | :bytes}}
 
   @typedoc "Per-table, per-node collection limits."
-  @type limits :: %{max_rows: pos_integer(), max_bytes: pos_integer()}
+  @type limits :: %{
+          required(:max_rows) => pos_integer(),
+          required(:max_bytes) => pos_integer(),
+          optional(:all_supervisors) => boolean()
+        }
 
   # How long a supervisor may take to answer which_children.
   @call_timeout 1_000
@@ -88,7 +92,11 @@ defmodule Porthole.Collector do
 
   # Reads each table on `node` once, and shapes it here.
   defp snapshot(node, tables, limits, timeout) do
-    gather_limits = %{max_rows: limits.max_rows, call_timeout: @call_timeout}
+    gather_limits = %{
+      max_rows: limits.max_rows,
+      call_timeout: @call_timeout,
+      all_supervisors: Map.get(limits, :all_supervisors, false)
+    }
 
     Enum.reduce_while(tables, {:ok, %{}}, fn table, {:ok, acc} ->
       {name, args} = table.gather(gather_limits)
