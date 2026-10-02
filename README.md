@@ -132,7 +132,11 @@ aggregates and subqueries, and the running system stays the source of truth.
   (`:erl_eval`, part of OTP): any Elixir app on OTP 27+ can be observed
   without adding Porthole as a dependency or redeploying it. Agents never
   send code, only SQL, which runs on the querying node (the only one that
-  needs SQLite; `exqlite` is an optional dependency).
+  needs SQLite; `exqlite` is an optional dependency). The price is CPU on
+  the observed node: interpreted code is several times slower than compiled
+  code, about 1.3 s of one scheduler (at low priority) to collect 100k
+  processes. See [what evaluation
+  costs](guides/team-setup.md#what-evaluation-costs).
 - **Authenticated.** The HTTP server requires a bearer token per client; each
   token carries its own policy, and removing it revokes access.
 - **Policies** define every tier (`observe`, `trace`, `evaluate`, `mutate`)

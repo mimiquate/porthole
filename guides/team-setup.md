@@ -474,10 +474,10 @@ rest of the cluster still answers) and is never crashed by it.
 ### Cost
 
 Each query collects only the tables it mentions, once (twice with a window).
-Collecting `processes` calls `Process.info/2` for every process, so on a node
-with a million processes a query costs roughly what `:observer`'s process
-tab costs for one refresh. Nothing runs between queries, and nothing stays
-on observed nodes after a query.
+Collecting `processes` calls `Process.info/2` for every process, like
+`:observer`'s process tab, but through OTP's interpreter, which costs more
+(see [what evaluation costs](#what-evaluation-costs)). Nothing runs between
+queries, and nothing stays on observed nodes after a query.
 
 On each observed node, collection:
 
@@ -504,6 +504,9 @@ kept busy):
 | `processes`, 10k processes | 0.3 s | 16 s |
 | `processes`, 100k processes | 4 s | ~2 min |
 
+(The `processes` figures were measured before collection became about 30%
+faster; treat them as upper bounds.)
+
 With the default 10 s deadline, `processes` therefore times out on a
 saturated node with more than a few thousand processes: the query returns
 an error for that node (the others still answer) and nothing keeps running
@@ -511,6 +514,39 @@ there. Start with `system`, whose `run_queue` shows the saturation itself,
 and compare nodes: an overloaded node next to healthy ones is often the
 answer. Collecting did not measurably slow the application in these
 measurements, idle or saturated.
+
+### What evaluation costs
+
+Your nodes don't have Porthole's code, so they run its collection code
+through `:erl_eval`, OTP's interpreter. That is what lets you observe an app
+without installing anything, and it has a price: interpreted code is several
+times slower than compiled code, and that time is spent on your node.
+
+Measured on a laptop, on an idle node with 100k processes:
+
+| | Compiled, for comparison | Evaluated (what runs on your node) |
+|---|---|---|
+| Collecting `processes` on the node | ~0.15 s | ~1.3 s |
+| The whole query, end to end | | ~3.8 s |
+| Data built on the node and sent to the sidecar | | ~19 MB (about 200 bytes per process) |
+
+What that means in practice:
+
+- **CPU.** A `processes` query costs roughly 13 µs of one scheduler per
+  process on each node: about 0.1 s at 10k processes and about 1.3 s at 100k.
+  It runs at low priority, so it uses spare capacity rather than taking it
+  from your app. `system` and `applications` cost the same on any node;
+  `ets_tables` and `ports` grow with the number of tables and ports, and
+  `supervisors` with the number of supervisors (or with processes, with
+  `all_supervisors`).
+- **Memory.** The rows are built on the node and copied once before being
+  sent, so a `processes` query briefly holds about 200 bytes per process
+  there (about 20 MB at 100k processes). `max_rows` bounds it.
+- **Volume.** With the defaults, at most 4 queries run at once across all
+  clients, and each client runs at most 60 per minute. An agent that polls a
+  large node every few seconds keeps a scheduler partly busy: lower
+  `queries_per_minute` for such clients, and prefer `system` for health
+  checks.
 
 ## The human side
 
