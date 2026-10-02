@@ -58,6 +58,7 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
     sidecar = opts[:name] || "#{app_name}-porthole"
     client = opts[:client] || System.get_env("USER") || "me"
     shell = Mix.shell()
+    name_option = if opts[:name], do: " --name #{sidecar}", else: ""
 
     app = Fly.app(app_name)
     deploy = deploy_args(sidecar, app, opts[:image])
@@ -72,8 +73,14 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
         shell.info("Creating #{sidecar} in #{app.org}...")
         Fly.run!(["apps", "create", sidecar, "--org", app.org], "could not create #{sidecar}")
 
-      :sidecar ->
+      status when status in [:trial, :empty] ->
         shell.info("Updating #{sidecar}...")
+
+      :sidecar ->
+        Mix.raise("""
+        #{sidecar} is a Porthole sidecar that was not started by this command (a
+        permanent one, for instance). It is left alone: pick another --name.
+        """)
 
       :other ->
         Mix.raise("#{sidecar} already exists and is not a Porthole sidecar; pick another --name")
@@ -87,7 +94,8 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
     })
 
     shell.info("Deploying #{sidecar} (observing #{dns})...")
-    Fly.run!(deploy ++ ["--env", "DNS_CLUSTER_QUERY=#{dns}"], "could not deploy #{sidecar}")
+    env = ["--env", "DNS_CLUSTER_QUERY=#{dns}", "--env", "#{Fly.trial_marker()}=true"]
+    Fly.run!(deploy ++ env, "could not deploy #{sidecar}")
 
     shell.info("Checking what #{sidecar} observes...")
 
@@ -117,7 +125,7 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
 
     Remove everything when you are done (the app is not touched):
 
-        mix porthole.fly.down #{app_name}
+        mix porthole.fly.down #{app_name}#{name_option}
     """)
 
     unless Fly.fixed_cookie?(app_name) do

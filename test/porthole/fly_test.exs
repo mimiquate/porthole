@@ -97,13 +97,44 @@ defmodule Porthole.FlyTest do
     refute calls.() =~ "destroy"
   end
 
-  test "down destroys the sidecar", %{answer: answer, calls: calls} do
+  test "down destroys a sidecar started by up, once its name is typed",
+       %{answer: answer, calls: calls} do
     answer.("apps-list", ~s([{"Name":"shop-porthole","Deployed":true}]))
-    answer.("config-show", ~s({"env":{"PORTHOLE_PORT":"4040"}}))
+    answer.("config-show", ~s({"env":{"PORTHOLE_PORT":"4040","PORTHOLE_TRIAL":"true"}}))
     answer.("apps-destroy", "Destroyed app shop-porthole")
 
-    capture_io(fn -> Mix.Tasks.Porthole.Fly.Down.run(["shop", "--yes"]) end)
+    # Pressing Enter, or any other answer, cancels.
+    send(self(), {:mix_shell_input, :prompt, "\n"})
+    capture_io(fn -> Mix.Tasks.Porthole.Fly.Down.run(["shop"]) end)
+    refute calls.() =~ "destroy"
+
+    send(self(), {:mix_shell_input, :prompt, "shop-porthole\n"})
+    capture_io(fn -> Mix.Tasks.Porthole.Fly.Down.run(["shop"]) end)
     assert calls.() =~ "apps destroy shop-porthole --yes"
+  end
+
+  test "neither up nor down touch a sidecar they did not start (a permanent one)",
+       %{answer: answer, calls: calls} do
+    release(answer,
+      RELEASE_COOKIE: @cookie,
+      RELEASE_DISTRIBUTION: "name",
+      ERL_AFLAGS: "-proto_dist inet6_tcp"
+    )
+
+    answer.("apps-list", ~s([{"Name":"shop-porthole","Deployed":true}]))
+    answer.("config-show", ~s({"env":{"PORTHOLE_PORT":"4040"}}))
+
+    assert_raise Mix.Error, ~r/not started by mix porthole.fly.up/, fn ->
+      Mix.Tasks.Porthole.Fly.Down.run(["shop", "--yes"])
+    end
+
+    assert_raise Mix.Error, ~r/not started by this command/, fn ->
+      Mix.Tasks.Porthole.Fly.Up.run(["shop"])
+    end
+
+    refute calls.() =~ "destroy"
+    refute calls.() =~ "secrets"
+    refute calls.() =~ "deploy"
   end
 
   test "an unknown app is a clear error" do

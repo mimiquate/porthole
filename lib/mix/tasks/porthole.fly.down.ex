@@ -6,8 +6,10 @@ defmodule Mix.Tasks.Porthole.Fly.Down do
 
       $ mix porthole.fly.down my-app
 
-  The app itself is not touched: nothing was installed in it. Only an app
-  running the Porthole sidecar is destroyed; anything else is refused.
+  The app itself is not touched: nothing was installed in it. Only a
+  sidecar started by `mix porthole.fly.up` is destroyed: any other app,
+  including a Porthole sidecar set up some other way (a team's permanent
+  one), is refused. It asks you to type the sidecar's name to confirm.
 
   ## Options
 
@@ -36,15 +38,34 @@ defmodule Mix.Tasks.Porthole.Fly.Down do
         Mix.raise("#{sidecar} is not a Porthole sidecar; refusing to destroy it")
 
       :sidecar ->
-        if yes? || Mix.shell().yes?("Destroy the Fly app #{sidecar}?") do
+        Mix.raise("""
+        #{sidecar} is a Porthole sidecar that was not started by mix porthole.fly.up
+        (a permanent one, for instance); refusing to destroy it. Use fly apps destroy
+        if you really mean to.
+        """)
+
+      status when status in [:trial, :empty] ->
+        if yes? || confirmed?(sidecar) do
           Fly.run!(["apps", "destroy", sidecar, "--yes"], "could not destroy #{sidecar}")
 
           Mix.shell().info("""
-          #{sidecar} is gone. If you connected an agent, remove it too, e.g.:
+          #{sidecar} is gone. If you connected an agent, remove it too, from the
+          folder where you added it, e.g.:
 
               claude mcp remove #{sidecar}
           """)
         end
+    end
+  end
+
+  defp confirmed?(sidecar) do
+    answer = Mix.shell().prompt("Type #{sidecar} to destroy it (anything else cancels):")
+
+    if String.trim(answer) == sidecar do
+      true
+    else
+      Mix.shell().info("Cancelled: nothing was destroyed.")
+      false
     end
   end
 end

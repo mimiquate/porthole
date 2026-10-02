@@ -54,8 +54,12 @@ $ mix porthole.fly.down my-app
 $ claude mcp remove my-app-porthole
 ```
 
-`down` destroys the sidecar app, with its secrets and tokens, and refuses to
-destroy anything that is not a Porthole sidecar.
+`down` asks you to type the sidecar's name, then destroys it with its
+secrets and tokens. Run `claude mcp remove` from the folder where you added
+the server. `up` marks the sidecars it creates, and both commands only act
+on those: a sidecar you set up to stay (next section) is never updated or
+destroyed by them, even if its name matches. Use `--name` with both
+commands when you already have a sidecar called `my-app-porthole`.
 
 What your app needs: an Elixir release on OTP 27+, distributed with long
 names over IPv6, which is how `fly launch` sets up Phoenix apps

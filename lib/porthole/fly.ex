@@ -91,11 +91,21 @@ defmodule Porthole.Fly do
     Enum.any?(secrets, &(&1["name"] == "RELEASE_COOKIE"))
   end
 
+  @doc "The environment variable that marks sidecars deployed by `mix porthole.fly.up`."
+  @spec trial_marker() :: String.t()
+  def trial_marker, do: "PORTHOLE_TRIAL"
+
   @doc """
-  `:missing`, `:sidecar` (an app running the sidecar, or created and never
-  deployed), or `:other`: an app that must not be touched.
+  What the Fly app `name` is, as far as `up` and `down` are concerned:
+
+    * `:missing` - it does not exist;
+    * `:empty` - it exists but was never deployed (e.g. `up` failed midway);
+    * `:trial` - a sidecar deployed by `mix porthole.fly.up`;
+    * `:sidecar` - a sidecar set up some other way (a team's permanent one),
+      which `up` and `down` must not touch;
+    * `:other` - any other app.
   """
-  @spec sidecar_status(String.t()) :: :missing | :sidecar | :other
+  @spec sidecar_status(String.t()) :: :missing | :empty | :trial | :sidecar | :other
   def sidecar_status(name) do
     apps = json!(["apps", "list", "--json"], "could not list your Fly apps")
 
@@ -104,12 +114,18 @@ defmodule Porthole.Fly do
         :missing
 
       %{"Deployed" => false} ->
-        :sidecar
+        :empty
 
       _app ->
         case fly(["config", "show", "-a", name]) do
           {config, 0} ->
-            if get_in(JSON.decode!(config), ["env", "PORTHOLE_PORT"]), do: :sidecar, else: :other
+            env = JSON.decode!(config)["env"] || %{}
+
+            cond do
+              env[trial_marker()] -> :trial
+              env["PORTHOLE_PORT"] -> :sidecar
+              true -> :other
+            end
 
           _ ->
             :other
