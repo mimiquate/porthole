@@ -10,24 +10,6 @@ defmodule Porthole.Tables.Processes do
 
   alias Porthole.{Remote, Term}
 
-  @items [
-    :registered_name,
-    :initial_call,
-    {:dictionary, :"$initial_call"},
-    {:dictionary, :"$ancestors"},
-    {:dictionary, :"$process_label"},
-    :current_function,
-    :status,
-    :message_queue_len,
-    :memory,
-    :binary,
-    :reductions,
-    :links,
-    :monitors,
-    :monitored_by,
-    :group_leader
-  ]
-
   @impl true
   def name, do: "processes"
 
@@ -67,35 +49,37 @@ defmodule Porthole.Tables.Processes do
   end
 
   @impl true
-  def gather(limits), do: {:processes, [@items, limits.max_rows]}
+  def gather(limits), do: {:processes, [limits.max_rows]}
 
   @impl true
   def shape(%{rows: rows, truncated: truncated, masters: masters}) do
     applications = Map.new(masters, fn {master, app} -> {master, Atom.to_string(app)} end)
-    {for({pid, info} <- rows, do: row(pid, Map.new(info), applications)), truncated}
+    {for(row <- rows, do: row(row, applications)), truncated}
   end
 
-  defp row(pid, info, applications) do
-    {monitors_count, last_monitor} = info.monitors
-
+  defp row(
+         {pid, name, initial_call, dictionary_initial_call, ancestors, label, current_function,
+          status, message_queue_len, memory, binary_memory, reductions, links_count,
+          monitors_count, last_monitor, monitored_by_count, group_leader},
+         applications
+       ) do
     %{
       pid: Remote.pid(pid),
-      registered_name:
-        if(info.registered_name == [], do: nil, else: Term.name(info.registered_name)),
-      initial_call: initial_call(info[{:dictionary, :"$initial_call"}], info.initial_call),
-      current_function: Term.mfa(info.current_function),
-      waiting_on: waiting_on(info.current_function, last_monitor),
-      label: label(info[{:dictionary, :"$process_label"}]),
-      application: application(applications, info.group_leader),
-      ancestors: ancestors(info[{:dictionary, :"$ancestors"}]),
-      status: Atom.to_string(info.status),
-      message_queue_len: info.message_queue_len,
-      memory: info.memory,
-      binary_memory: info.binary_memory,
-      reductions: info.reductions,
-      links_count: info.links_count,
+      registered_name: if(name == [], do: nil, else: Term.name(name)),
+      initial_call: initial_call(dictionary_initial_call, initial_call),
+      current_function: Term.mfa(current_function),
+      waiting_on: waiting_on(current_function, last_monitor),
+      label: label(label),
+      application: application(applications, group_leader),
+      ancestors: ancestors(ancestors),
+      status: Atom.to_string(status),
+      message_queue_len: message_queue_len,
+      memory: memory,
+      binary_memory: binary_memory,
+      reductions: reductions,
+      links_count: links_count,
       monitors_count: monitors_count,
-      monitored_by_count: info.monitored_by_count
+      monitored_by_count: monitored_by_count
     }
   end
 

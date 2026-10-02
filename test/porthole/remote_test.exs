@@ -109,19 +109,20 @@ defmodule Porthole.RemoteTest do
   # must come back as a query error, never as a crash on their node. (Run on
   # this node, where the log can be captured.)
   test "a failing collection is returned as an error, without crash logs", %{node: node} do
-    # An invalid process_info item makes the worker raise.
+    # An invalid maximum makes the worker raise (in lists:sublist/2).
     {result, log} =
       ExUnit.CaptureLog.with_log(fn ->
-        result = Remote.run(node(), :processes, [[:not_an_item], 10], 5_000)
+        result = Remote.run(node(), :processes, [:not_a_number], 5_000)
         Process.sleep(100)
         result
       end)
 
-    assert {:error, {:error, :badarg}} = result
+    assert {:error, {:error, :function_clause}} = result
     assert log == ""
 
     # The same on a node without Porthole, by evaluation.
-    assert {:error, {:error, :badarg}} = Remote.run(node, :processes, [[:not_an_item], 10], 5_000)
+    assert {:error, {:error, :function_clause}} =
+             Remote.run(node, :processes, [:not_a_number], 5_000)
 
     assert {:error, {:error, :badarg}} =
              Porthole.Gather.with_deadline(fn _caller -> :erlang.error(:badarg) end, [], 5_000)

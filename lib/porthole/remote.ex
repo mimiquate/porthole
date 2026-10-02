@@ -36,10 +36,9 @@ defmodule Porthole.Remote do
       {:call, 1, {:var, 1, :Run}, [{:var, 1, :Gather}, {:var, 1, :Args}, {:var, 1, :Budget}]}
     ]
 
-    bindings =
-      :erl_eval.new_bindings()
-      |> then(&:erl_eval.add_binding(:Args, args, &1))
-      |> then(&:erl_eval.add_binding(:Budget, budget, &1))
+    # A map, not the default orddict: the gather code binds many variables
+    # per process, and lookups in an orddict made evaluation 2-3x slower.
+    bindings = %{Args: args, Budget: budget}
 
     # A little longer than the on-node deadline, so the node reports its own
     # timeout first.

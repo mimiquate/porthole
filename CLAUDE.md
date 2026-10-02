@@ -76,8 +76,10 @@ when a real question needs it.
 - History / continuous collection / persistence (that is closer to a telemetry product)
 - Joining with static program data (xref / call graph); planned later
 - Redaction beyond basic `Inspect` respect (planned; don't design it out)
-- Column pruning and filter pushdown (tried and removed for simplicity; revisit only if
-  collection cost shows up on large nodes, and only for the expensive items like `:binary`)
+- Column pruning and filter pushdown (tried and removed for simplicity). Measured again
+  2026-10-02: all 15 `process_info` items for 100k processes take 144 ms compiled, and no
+  item dominates (each costly one is 60–90 ms alone, mostly shared overhead), so pruning
+  items would save little. The cost is in evaluation (below), not in the items.
 - Phase 2 of the production roadmap, remaining: a real Kubernetes deployment is untested
   (the guide says so). Fly.io is verified in production (2026-10-01, elixir_toolbox /
   ex-tools, guides/deploy-fly.md): discovery from `ex-tools.internal` with image-id node
@@ -152,8 +154,14 @@ looking, answers are exact "now", no state. History is out of scope.
   read-only. Agents send SQL, never code; SQL runs on the querying node. Evaluating needs
   nothing beyond the cookie the querying node already holds.
 - Pids, ports and refs are rendered as their own node sees them (`Remote.pid/1`).
-- Cost: evaluation is ~1.9× slower than compiled code on the node (measured: 241 ms vs
-  126 ms for 100k processes; ~2.5× end to end including transfer and shaping).
+- Cost: evaluation dominates. `erl_eval` pays for every interpreted step and variable
+  binding, so gather functions do as little per item as possible: one call and one match
+  per process, `:lists` functions (compiled on the node) where possible, and tuples rather
+  than keyword lists. `Remote.run` passes bindings as a map: with the default orddict,
+  binding many variables per process made evaluation 2–3× slower (verified on OTP 27–29).
+  100k processes (2026-10-02): `processes` gather 1.3 s evaluated vs 153 ms compiled;
+  end to end ~3.8 s, result 19 MB (was ~5.4 s and 47 MB with a function mapped over each
+  item). Things that were slower: `:lists.zipwith` over `process_info` (extra list work).
 - Every row gets a `node` column; all nodes' rows go into one in-memory DB.
 - Only the querying node needs `exqlite`. Keep `Porthole.Gather` free of NIF deps.
 - **Decision (2026-09-28): production means a separate sidecar, with a fixed cookie.**

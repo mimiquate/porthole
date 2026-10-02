@@ -67,7 +67,7 @@ defmodule Porthole.Gather.CheckTest do
   end
 
   test "Porthole.Gather itself passes, and its code is available for evaluation" do
-    assert {:fun, _, {:clauses, [_ | _]}} = Porthole.Gather.Code.fun_expr(:processes, 3)
+    assert {:fun, _, {:clauses, [_ | _]}} = Porthole.Gather.Code.fun_expr(:processes, 2)
     assert {:fun, _, {:clauses, [_ | _]}} = Porthole.Gather.Code.fun_expr(:with_deadline, 3)
   end
 
