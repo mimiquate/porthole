@@ -328,21 +328,10 @@ repository root: `docker build -f sidecar/Dockerfile -t porthole-sidecar .`
 On IPv6-only networks (such as Fly.io's), also pass
 `ERL_AFLAGS="-proto_dist inet6_tcp"`, as your app does.
 
-**Kubernetes** (sketch, not yet tested on a cluster): run the sidecar as a
-Deployment in the same namespace, with the app's headless Service as the
-DNS query and the pod IP as its address:
-
-```yaml
-env:
-  - name: POD_IP
-    valueFrom: {fieldRef: {fieldPath: status.podIP}}
-  - name: RELEASE_COOKIE
-    valueFrom: {secretKeyRef: {name: my-app, key: cookie}}
-  - name: DNS_CLUSTER_QUERY
-    value: my-app-headless.default.svc.cluster.local
-  - name: PORTHOLE_TOKENS
-    valueFrom: {secretKeyRef: {name: porthole, key: tokens}}
-```
+**Kubernetes.** [Deploying the sidecar on Kubernetes](deploy-kubernetes.md)
+has the manifest, and `mix porthole.k8s.up my-app` / `mix porthole.k8s.down
+my-app` to try it on a production Deployment first (verified on kind; not
+yet on a managed cluster).
 
 **Without the packaged sidecar**, any project that depends on `porthole`,
 `exqlite`, `plug` and `bandit` can run the same server with

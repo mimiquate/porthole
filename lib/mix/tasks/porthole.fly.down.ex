@@ -19,7 +19,7 @@ defmodule Mix.Tasks.Porthole.Fly.Down do
 
   use Mix.Task
 
-  alias Porthole.Fly
+  alias Porthole.{Fly, Trial}
 
   @impl true
   def run(args) do
@@ -45,7 +45,7 @@ defmodule Mix.Tasks.Porthole.Fly.Down do
         """)
 
       status when status in [:trial, :empty] ->
-        if yes? || confirmed?(sidecar) do
+        if yes? || Trial.confirmed?(sidecar) do
           Fly.run!(["apps", "destroy", sidecar, "--yes"], "could not destroy #{sidecar}")
 
           Mix.shell().info("""
@@ -55,17 +55,6 @@ defmodule Mix.Tasks.Porthole.Fly.Down do
               claude mcp remove #{sidecar}
           """)
         end
-    end
-  end
-
-  defp confirmed?(sidecar) do
-    answer = Mix.shell().prompt("Type #{sidecar} to destroy it (anything else cancels):")
-
-    if String.trim(answer) == sidecar do
-      true
-    else
-      Mix.shell().info("Cancelled: nothing was destroyed.")
-      false
     end
   end
 end

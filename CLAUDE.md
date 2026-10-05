@@ -66,6 +66,20 @@ when a real question needs it.
   Porthole dependency and a build-generated cookie). `up` marks its sidecars
   (`PORTHOLE_TRIAL` env) and both commands only act on marked ones, so a team's permanent
   sidecar is never touched; `down` asks for the name to be typed.
+- **`mix porthole.k8s.up DEPLOYMENT` / `k8s.down`** (`Porthole.Kube`; shared code in
+  `Porthole.Trial`): the same trial on Kubernetes. Creates a Deployment, a Secret and a
+  headless Service selecting the app's pods (the sidecar finds them by DNS), all labelled
+  `porthole.mimiquate.com/trial=<sidecar>`; `down` deletes by that label. When the pod spec
+  takes `RELEASE_COOKIE` from a Secret (`secretKeyRef` or `envFrom`), the sidecar references
+  it and the cookie is never read (the inspection script runs with `nocookie`). Requires long
+  names with the pod IP as host; hostname-based names (StatefulSets) are refused for now.
+  Checks `auth can-i` first; waits until it sees as many nodes as ready pods; a token
+  fingerprint annotation on the pod template rolls the sidecar when tokens change (pods read
+  Secrets only at start). Verified on kind 2026-10-05 (Secret cookie, build-time cookie,
+  NetworkPolicy deny and allow, permanent-sidecar refusal, the permanent manifest).
+  Lesson: containerd as configured by kind sets the open-files limit to ~1e9, and the BEAM
+  sizes its port table from it, reserving GBs: OOMKilled at start under a memory limit. The
+  sidecar image sets `ERL_MAX_PORTS=65536`.
 - **Sidecar image**: `.github/workflows/sidecar-image.yml` publishes `sidecar/Dockerfile` to
   `ghcr.io/mimiquate/porthole-sidecar` for amd64 and arm64: `:latest` and `:sha-…` from
   `main`, `:X.Y.Z` from `vX.Y.Z` tags. The package must be public for Fly and clusters to
@@ -88,8 +102,8 @@ when a real question needs it.
   2026-10-02: all 15 `process_info` items for 100k processes take 144 ms compiled, and no
   item dominates (each costly one is 60–90 ms alone, mostly shared overhead), so pruning
   items would save little. The cost is in evaluation (below), not in the items.
-- Phase 2 of the production roadmap, remaining: a real Kubernetes deployment is untested
-  (the guide says so). Fly.io is verified in production (2026-10-01, elixir_toolbox /
+- Phase 2 of the production roadmap, remaining: Kubernetes is verified on kind only, not on
+  a managed cluster (guides/deploy-kubernetes.md says so). Fly.io is verified in production (2026-10-01, elixir_toolbox /
   ex-tools, guides/deploy-fly.md): discovery from `ex-tools.internal` with image-id node
   names, IPv6, `fly proxy`, a real agent querying. First-deploy lesson: a cookie copied by
   hand differed from the app's ("Invalid challenge reply" in the app's logs); Fly secret
@@ -101,8 +115,7 @@ when a real question needs it.
   sidecar's own distribution; more client snippets. Sidecar and app are upgraded
   independently since collection by evaluation (no Porthole on observed nodes); an OTP 27
   sidecar observes OTP 27–29 apps and vice versa (tested 2026-10-01), so one prebuilt image
-  can serve everyone. Next: `mix porthole.k8s.up` / `k8s.down` (same model as Fly, verified on
-  kind; uses the published image). The Docker image is
+  can serve everyone. The Docker image is
   verified (2026-09-28): compose with an app on long names and a fixed cookie, discovery
   from DNS_CLUSTER_QUERY, scaling 1→2→1, wrong cookie, missing config, non-root user.
   The builder image tag must exist on Docker Hub (hexpm/elixir tags carry a Debian date). Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package

@@ -44,7 +44,7 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
 
   use Mix.Task
 
-  alias Porthole.Fly
+  alias Porthole.{Fly, Trial}
 
   @switches [name: :string, client: :string, image: :string, build: :boolean]
 
@@ -101,24 +101,19 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
     })
 
     shell.info("Deploying #{sidecar} (observing #{dns})...")
-    env = ["--env", "DNS_CLUSTER_QUERY=#{dns}", "--env", "#{Fly.trial_marker()}=true"]
+    env = ["--env", "DNS_CLUSTER_QUERY=#{dns}", "--env", "#{Trial.trial_marker()}=true"]
     Fly.run!(deploy ++ env, "could not deploy #{sidecar}")
 
     shell.info("Checking what #{sidecar} observes...")
 
-    case Fly.with_proxy(sidecar, &Fly.observed_nodes(&1, token)) do
-      {:ok, nodes} ->
-        shell.info("""
+    observed = Fly.with_proxy(sidecar, &Trial.observed_nodes(&1, token, app.machines))
 
-        #{sidecar} observes #{length(nodes)} node(s) of #{app_name}: #{Enum.join(nodes, ", ")}
-        """)
+    case Trial.report(observed, sidecar, app_name, app.machines) do
+      {:ok, message} ->
+        shell.info("\n" <> message <> "\n")
 
-      {:error, reason} ->
-        shell.error("""
-
-        #{sidecar} is deployed but observes no nodes yet: #{reason}
-        Check its logs with: fly logs -a #{sidecar}
-        """)
+      {:error, message} ->
+        shell.error("\n#{message}\nCheck its logs with: fly logs -a #{sidecar}\n")
     end
 
     shell.info("""
@@ -192,7 +187,7 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
         Mix.raise("sidecar/Dockerfile not found in #{root}: --build needs a checkout of Porthole")
 
       true ->
-        ["deploy" | common] ++ ["--image", opts[:image] || Fly.default_image()]
+        ["deploy" | common] ++ ["--image", opts[:image] || Trial.default_image()]
     end
   end
 end

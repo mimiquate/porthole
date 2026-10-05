@@ -89,6 +89,8 @@ WHERE links_count = 0 AND monitors_count = 0 AND monitored_by_count = 0
 - [Deploying the sidecar on Fly.io](guides/deploy-fly.md): try it on a
   production app with `mix porthole.fly.up my-app` (no change to the app),
   remove it with `mix porthole.fly.down my-app`, or set it up to stay.
+- [Deploying the sidecar on Kubernetes](guides/deploy-kubernetes.md): the
+  same, with `mix porthole.k8s.up my-app` / `k8s.down`, or a manifest.
 - [Setting up your team](guides/team-setup.md): development and production
   setup, agent instructions, policy, audit, and the trust boundary.
 - [Evals](evals/README.md): reproducible runs of an agent with Porthole
