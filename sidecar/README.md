@@ -18,7 +18,10 @@ $ RELEASE_COOKIE="$RELEASE_COOKIE" PORTHOLE_TOKENS="oncall:<sha256>" DNS_CLUSTER
   _build/prod/rel/porthole_sidecar/bin/porthole_sidecar start
 ```
 
-or with Docker, from the repository root:
+or with Docker: the image is published as
+`ghcr.io/mimiquate/porthole-sidecar` (`:latest` from `main`, versioned tags
+from releases; amd64 and arm64) by `.github/workflows/sidecar-image.yml`. To
+build it yourself, from the repository root:
 
 ```console
 $ docker build -f sidecar/Dockerfile -t porthole-sidecar .

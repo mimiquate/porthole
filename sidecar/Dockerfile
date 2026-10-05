@@ -22,6 +22,10 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 ENV MIX_ENV=prod
+# The image is also built for another architecture under QEMU emulation (see
+# .github/workflows/sidecar-image.yml), where the BEAM's JIT fails in odd ways
+# with its default dual-mapped memory. Build stage only.
+ENV ERL_FLAGS="+JMsingle true"
 RUN mix local.hex --force && mix local.rebar --force
 
 WORKDIR /src

@@ -34,8 +34,10 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
     * `--name NAME` - the sidecar's Fly app (default: `<app>-porthole`).
     * `--client ID` - who the token is for, as the audit log shows it
       (default: your user name).
-    * `--image IMAGE` - deploy a prebuilt sidecar image instead of building
-      one from this checkout.
+    * `--image IMAGE` - the sidecar image to deploy (default: the published
+      `ghcr.io/mimiquate/porthole-sidecar:latest`).
+    * `--build` - build the sidecar from this checkout instead of deploying a
+      published image (e.g. to try local changes).
 
   Set `PORTHOLE_FLY` to use a `fly` executable that is not on the `PATH`.
   """
@@ -44,13 +46,18 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
 
   alias Porthole.Fly
 
-  @switches [name: :string, client: :string, image: :string]
+  @switches [name: :string, client: :string, image: :string, build: :boolean]
 
   @impl true
   def run(args) do
     case OptionParser.parse(args, strict: @switches) do
-      {opts, [app], []} -> up(app, opts)
-      _ -> Mix.raise("usage: mix porthole.fly.up APP [--name NAME] [--client ID] [--image IMAGE]")
+      {opts, [app], []} ->
+        up(app, opts)
+
+      _ ->
+        Mix.raise(
+          "usage: mix porthole.fly.up APP [--name NAME] [--client ID] [--image IMAGE | --build]"
+        )
     end
   end
 
@@ -61,7 +68,7 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
     name_option = if opts[:name], do: " --name #{sidecar}", else: ""
 
     app = Fly.app(app_name)
-    deploy = deploy_args(sidecar, app, opts[:image])
+    deploy = deploy_args(sidecar, app.region, opts)
 
     shell.info("Reading #{app_name}'s distribution settings from its running release...")
     release = Fly.release(app_name)
@@ -159,7 +166,11 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
     end
   end
 
-  defp deploy_args(sidecar, app, image) do
+  @doc false
+  # The `fly deploy` arguments: the published image by default, `--image`, or
+  # a build from this checkout with `--build`.
+  @spec deploy_args(String.t(), String.t(), keyword()) :: [String.t()]
+  def deploy_args(sidecar, region, opts) do
     root = Path.expand("../../..", __DIR__)
     config = Path.join(root, "sidecar/fly.toml")
     dockerfile = Path.join(root, "sidecar/Dockerfile")
@@ -168,12 +179,20 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
       Mix.raise("sidecar/fly.toml not found in #{root}: run this from a checkout of Porthole")
     end
 
-    common = ["--config", config, "--app", sidecar, "--primary-region", app.region, "--ha=false"]
+    common = ["--config", config, "--app", sidecar, "--primary-region", region, "--ha=false"]
 
     cond do
-      image -> ["deploy" | common] ++ ["--image", image]
-      File.exists?(dockerfile) -> ["deploy", root | common] ++ ["--dockerfile", dockerfile]
-      true -> Mix.raise("sidecar/Dockerfile not found in #{root}: pass --image")
+      opts[:build] && opts[:image] ->
+        Mix.raise("pass either --image or --build, not both")
+
+      opts[:build] && File.exists?(dockerfile) ->
+        ["deploy", root | common] ++ ["--dockerfile", dockerfile]
+
+      opts[:build] ->
+        Mix.raise("sidecar/Dockerfile not found in #{root}: --build needs a checkout of Porthole")
+
+      true ->
+        ["deploy" | common] ++ ["--image", opts[:image] || Fly.default_image()]
     end
   end
 end

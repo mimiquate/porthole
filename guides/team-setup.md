@@ -312,18 +312,19 @@ a production app first, `mix porthole.fly.up my-app` sets up a sidecar in
 one command (reading the cookie from the running app, so the app need not
 have a fixed one yet) and `mix porthole.fly.down my-app` removes it.
 
-**Docker.** Build from the repository root:
+**Docker.** Use the published image (amd64 and arm64):
 
 ```console
-$ docker build -f sidecar/Dockerfile -t porthole-sidecar .
 $ docker run -p 4040:4040 -e RELEASE_COOKIE="$RELEASE_COOKIE" \
     -e PORTHOLE_TOKENS="oncall:fd07d5..." -e DNS_CLUSTER_QUERY="my-app.internal" \
-    porthole-sidecar
+    ghcr.io/mimiquate/porthole-sidecar:latest
 ```
 
-The image's Elixir/OTP need not match your cluster's: the default (OTP 27)
-works with apps on OTP 27 to 29 (tested). Choose with `--build-arg
-OTP_VERSION=...`.
+`:latest` follows `main`; releases add versioned tags (`:0.1.0`). The
+image's Elixir/OTP need not match your cluster's: it runs OTP 27, which
+observes apps on OTP 27 to 29 (tested). To build it yourself, from the
+repository root: `docker build -f sidecar/Dockerfile -t porthole-sidecar .`
+(choose versions with `--build-arg OTP_VERSION=...`).
 On IPv6-only networks (such as Fly.io's), also pass
 `ERL_AFLAGS="-proto_dist inet6_tcp"`, as your app does.
 

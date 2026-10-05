@@ -30,6 +30,13 @@ defmodule Porthole.Fly do
           dns: String.t() | nil
         }
 
+  @doc """
+  The sidecar image deployed by default, published from `main` by the
+  repository's `sidecar-image` workflow (amd64 and arm64).
+  """
+  @spec default_image() :: String.t()
+  def default_image, do: "ghcr.io/mimiquate/porthole-sidecar:latest"
+
   @doc "The `fly` executable: `PORTHOLE_FLY`, or `fly` on the PATH."
   @spec executable() :: String.t()
   def executable do

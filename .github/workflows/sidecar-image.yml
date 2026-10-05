@@ -1,0 +1,65 @@
+name: Sidecar image
+
+# Publishes the sidecar's Docker image (sidecar/Dockerfile) to
+# ghcr.io/mimiquate/porthole-sidecar, so it can be deployed without building
+# it (mix porthole.fly.up, Kubernetes):
+#
+#   * every push to main: :latest and :sha-<commit>
+#   * every vX.Y.Z tag: :X.Y.Z
+#
+# amd64 and arm64: Fly.io and most clusters run amd64; Graviton nodes and
+# kind on Apple silicon run arm64. The image's Elixir/OTP need not match the
+# observed apps' (an OTP 27 sidecar observes apps on OTP 27 to 29).
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: sidecar-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 is built under emulation.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/mimiquate/porthole-sidecar
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.title=Porthole sidecar
+            org.opencontainers.image.description=Read-only SQL over a live BEAM cluster, for coding agents
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: sidecar/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

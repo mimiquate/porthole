@@ -137,6 +137,26 @@ defmodule Porthole.FlyTest do
     refute calls.() =~ "deploy"
   end
 
+  test "deploys the published image by default, or builds from the checkout with --build" do
+    alias Mix.Tasks.Porthole.Fly.Up
+
+    default = Up.deploy_args("shop-porthole", "ewr", [])
+    assert ["deploy" | _] = default
+    assert Enum.take(default, -2) == ["--image", "ghcr.io/mimiquate/porthole-sidecar:latest"]
+    refute "--dockerfile" in default
+
+    assert Enum.take(Up.deploy_args("shop-porthole", "ewr", image: "mine:1"), -2) ==
+             ["--image", "mine:1"]
+
+    built = Up.deploy_args("shop-porthole", "ewr", build: true)
+    assert "--dockerfile" in built
+    refute "--image" in built
+
+    assert_raise Mix.Error, ~r/either --image or --build/, fn ->
+      Up.deploy_args("shop-porthole", "ewr", build: true, image: "mine:1")
+    end
+  end
+
   test "an unknown app is a clear error" do
     File.rm!(Path.join(System.get_env("FAKE_DIR"), "status--a"))
 

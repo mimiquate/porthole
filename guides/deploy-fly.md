@@ -15,9 +15,9 @@ dependency and is not redeployed.
 
 ## Try it: two commands
 
-> **Status:** new. Verified end to end against releases in Docker, with a
-> stand-in for `fly`; not yet run on Fly.io itself. Please open an issue if
-> a step fails.
+> **Status:** new. Used on two Phoenix apps on Fly.io (October 2026),
+> including one without a fixed cookie and without Porthole as a
+> dependency. Please open an issue if a step fails.
 
 From a checkout of this repository, with `fly` logged in:
 
@@ -32,7 +32,9 @@ and region, then:
    console`) and stores it as the sidecar's secret. It is never printed,
    and the agent never gets it;
 2. generates a token for you;
-3. deploys the sidecar and checks that it sees your app's nodes;
+3. deploys the sidecar from the published image
+   (`ghcr.io/mimiquate/porthole-sidecar`; `--build` builds it from your
+   checkout instead) and checks that it sees your app's nodes;
 4. prints the two commands that remain: the tunnel and the agent.
 
 ```text
@@ -79,7 +81,7 @@ Responsibilities are split explicitly:
 
 | Where | What |
 |---|---|
-| This repository | `sidecar/Dockerfile`, `sidecar/fly.toml` (generic: nothing app-specific) and this guide |
+| This repository | `sidecar/fly.toml` (generic: nothing app-specific), the published sidecar image (`ghcr.io/mimiquate/porthole-sidecar`) and this guide |
 | The `fly` commands below | Everything specific to your app, passed as flags |
 | Fly secrets on the sidecar app | `RELEASE_COOKIE` and `PORTHOLE_TOKENS` |
 
@@ -98,8 +100,6 @@ The commands use these placeholders. Replace them with your own values:
 | `my-app-porthole` | `shop-porthole` | A name for the sidecar's Fly app |
 | `ewr` | `ewr` | A Fly region, usually your app's (`primary_region` in its `fly.toml`) |
 | `my-app.internal` | `shop.internal` | Your app's `DNS_CLUSTER_QUERY` (Phoenix apps on Fly: `<fly app>.internal`) |
-| `1.18.4`, `28.1` | `1.18.4`, `28.1` | The sidecar's Elixir and OTP. Any OTP 27+ works with apps on OTP 27 to 29 (tested); your app's versions are a safe choice |
-| `bookworm-20260610-slim` | `bookworm-20260610-slim` | A Debian tag that, with the two versions, forms an existing [`hexpm/elixir` image tag](https://hub.docker.com/r/hexpm/elixir/tags) |
 
 ### Before you start
 
@@ -138,30 +138,39 @@ $ unset RELEASE_COOKIE
 ### 2. Deploy
 
 ```console
-$ fly deploy . \
+$ fly deploy \
     --config sidecar/fly.toml \
-    --dockerfile sidecar/Dockerfile \
+    --image ghcr.io/mimiquate/porthole-sidecar:latest \
     --app my-app-porthole \
     --primary-region ewr \
     --ha=false \
-    --build-arg ELIXIR_VERSION=1.18.4 \
-    --build-arg OTP_VERSION=28.1 \
-    --build-arg DEBIAN_VERSION=bookworm-20260610-slim \
     --env DNS_CLUSTER_QUERY=my-app.internal
 ```
 
 | Flag | Why |
 |---|---|
-| `.` | Builds from this repository (the sidecar depends on the library in it) |
 | `--config sidecar/fly.toml` | The generic config: IPv6, the listener, a health check, no public service |
-| `--dockerfile sidecar/Dockerfile` | The sidecar image |
+| `--image …` | The published sidecar image (amd64 and arm64, built from `main`; versioned tags such as `:0.1.0` come with releases). Its Elixir/OTP need not match your app's |
 | `--app`, `--primary-region` | Your sidecar app and its region |
 | `--ha=false` | One machine: the sidecar holds no state, and a second one adds nothing |
-| `--build-arg …` | The sidecar's Elixir/OTP |
 | `--env DNS_CLUSTER_QUERY=…` | How the sidecar finds your app's nodes |
 
 Every later deploy (after a Porthole upgrade, for instance) is the same
 command, with the same values.
+
+**To build the sidecar yourself** instead (to try local changes, or to pin
+Elixir/OTP), build from this repository with its Dockerfile:
+
+```console
+$ fly deploy . --dockerfile sidecar/Dockerfile \
+    --config sidecar/fly.toml --app my-app-porthole --primary-region ewr --ha=false \
+    --build-arg ELIXIR_VERSION=1.18.3 --build-arg OTP_VERSION=27.3.3 \
+    --build-arg DEBIAN_VERSION=bookworm-20260610-slim \
+    --env DNS_CLUSTER_QUERY=my-app.internal
+```
+
+The three build arguments must form an existing
+[`hexpm/elixir` image tag](https://hub.docker.com/r/hexpm/elixir/tags).
 
 ### 3. Check it
 
@@ -234,6 +243,6 @@ asked, what, and the outcome.
 | Remove someone's access | Set `PORTHOLE_TOKENS` without their entry |
 | Remove Porthole | `fly apps destroy my-app-porthole`: nothing was installed in the app |
 | Deploy or scale the app | Nothing: the sidecar finds new machines within seconds |
-| Upgrade Porthole | Update your checkout and run step 2 again; the app is not involved |
+| Upgrade Porthole | Run step 2 again (it pulls the latest image); the app is not involved |
 | Rotate the cookie | Set the new `RELEASE_COOKIE` on both apps |
 | Review what agents looked at | `fly logs -a my-app-porthole`, `porthole.audit` lines |

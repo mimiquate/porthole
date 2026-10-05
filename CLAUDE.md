@@ -57,11 +57,19 @@ when a real question needs it.
   trial on Fly.io. `up` reads the running release's cookie and distribution settings from
   `/proc/<beam>/environ` over `fly ssh console` (works for generated per-build cookies too),
   imports it as the sidecar's secret via stdin (never printed, never in argv), generates a
-  token, deploys the sidecar from the checkout (or `--image`), checks through a temporary
+  token, deploys the published image (`ghcr.io/mimiquate/porthole-sidecar:latest`; `--image`
+  to override, `--build` to build from the checkout), checks through a temporary
   `fly proxy` that nodes are observed, and prints the tunnel + `claude mcp add` commands.
   `down` destroys only apps that are Porthole sidecars (`PORTHOLE_PORT` in their config).
-  `PORTHOLE_FLY` overrides the `fly` executable (tests use a fake). Verified end to end with a
-  Docker-backed fake `fly` (2026-10-01); not yet run on real Fly.
+  `PORTHOLE_FLY` overrides the `fly` executable (tests use a fake). Verified with a
+  Docker-backed fake `fly` and on real Fly (2026-10-02: ex-tools, and my-poll, which has no
+  Porthole dependency and a build-generated cookie). `up` marks its sidecars
+  (`PORTHOLE_TRIAL` env) and both commands only act on marked ones, so a team's permanent
+  sidecar is never touched; `down` asks for the name to be typed.
+- **Sidecar image**: `.github/workflows/sidecar-image.yml` publishes `sidecar/Dockerfile` to
+  `ghcr.io/mimiquate/porthole-sidecar` for amd64 and arm64: `:latest` and `:sha-…` from
+  `main`, `:X.Y.Z` from `vX.Y.Z` tags. The package must be public for Fly and clusters to
+  pull it without credentials.
 - **`sidecar/`**: a separate Mix project (depends on the library by path) that packages the
   production sidecar as a release and Docker image, configured only by env vars
   (`PortholeSidecar.Config`), tracking the cluster every 5s (seeds, their peers, DNS
@@ -93,8 +101,8 @@ when a real question needs it.
   sidecar's own distribution; more client snippets. Sidecar and app are upgraded
   independently since collection by evaluation (no Porthole on observed nodes); an OTP 27
   sidecar observes OTP 27–29 apps and vice versa (tested 2026-10-01), so one prebuilt image
-  can serve everyone. Next: publish a prebuilt sidecar image (so `fly.up` skips the build),
-  run `fly.up` on real Fly, then similar commands for other platforms. The Docker image is
+  can serve everyone. Next: `mix porthole.k8s.up` / `k8s.down` (same model as Fly, verified on
+  kind; uses the published image). The Docker image is
   verified (2026-09-28): compose with an app on long names and a fixed cookie, discovery
   from DNS_CLUSTER_QUERY, scaling 1→2→1, wrong cookie, missing config, non-root user.
   The builder image tag must exist on Docker Hub (hexpm/elixir tags carry a Debian date). Phase 3: large-node benchmarks, filter pushdown if needed, redaction, package
