@@ -83,7 +83,19 @@ when a real question needs it.
   sets `+Q 65536` in `sidecar/rel/vm.args.eex` (the image also sets `ERL_MAX_PORTS`).
   Verified in Docker with `--ulimit nofile=1073741816`: OOMKilled without the cap, runs with
   `+Q` alone. Idle sidecar on an 8-core host: ~60 MiB VM, ~140 MiB container (scheduler
-  allocators, stacks); its peak during large queries under the 256 MiB limit is unmeasured.
+  allocators, stacks).
+- **Sidecar memory during queries** (measured 2026-10-05, Docker, 8 schedulers, app nodes of
+  10k/100k processes): a query's cost on the querying node was ~4.5–4.9 KB per loaded process,
+  because rows were shaped in per-node tasks, copied to the query process and held as maps for
+  every node at once (256 MiB was not enough for one 100k-process node). Now: remote results
+  are encoded on the node (`Remote.run_encoded/4`, `term_to_binary`) and passed between
+  processes as a shared binary, decoded and loaded into SQLite one node at a time
+  (`Collector.reduce/7`), with a GC after each table, and each query runs in its own process
+  (memory freed when it ends): ~2–3 KB per process. Worst case measured: 675 MiB (2 nodes ×
+  50k rows loaded, 4 concurrent queries). Sidecars get 1 GiB (Fly `fly.toml`, k8s limit).
+  Memory grows with `max_concurrent` × (`max_bytes` loaded + one node's rows + other nodes'
+  encoded results waiting): for many large nodes, lower `max_concurrent` or `max_bytes`.
+  Not done (≈15 MiB per query): shaping rows lazily instead of as a list per table.
 - **Sidecar image**: `.github/workflows/sidecar-image.yml` publishes `sidecar/Dockerfile` to
   `ghcr.io/mimiquate/porthole-sidecar` for amd64 and arm64: `:latest` and `:sha-…` from
   `main`, `:X.Y.Z` from `vX.Y.Z` tags. The package must be public for Fly and clusters to
@@ -208,8 +220,9 @@ looking, answers are exact "now", no state. History is out of scope.
   therefore runs in a low-priority worker with a deadline enforced on the observed node
   itself, and the tables leave out the collecting processes (`self()` and `$callers`).
   Never rely on the caller's timeout alone to bound work on a production node.
-- Hard caps (policy): rows collected per table per node (on the node), bytes loaded per
-  table per node (on the querying node), rows returned,
+- Hard caps (policy): rows collected per table per node (`max_rows`, on the node), bytes
+  loaded per query (`max_bytes`, the querying node's memory budget: split evenly across
+  nodes and tables; decision 2026-10-05), rows returned,
   query/collection timeout, window length; cells are cut at 1 KB. Every cut sets `truncated`
   and adds a human-readable entry to `notes` saying which limit cut it.
 - Load limits (policy, enforced by `Porthole.Limiter`): `max_concurrent` queries on the

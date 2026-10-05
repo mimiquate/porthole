@@ -89,8 +89,8 @@ defmodule Porthole.LimitsTest do
     end
   end
 
-  describe "bytes collected" do
-    test "cap each table per node, and say so" do
+  describe "bytes loaded (max_bytes)" do
+    test "bound what one query loads, and say so" do
       total = Porthole.query!("SELECT count(*) FROM processes").rows |> hd() |> hd()
 
       result =
@@ -100,7 +100,23 @@ defmodule Porthole.LimitsTest do
       assert capped < total
       assert result.truncated
       assert [note] = result.notes
-      assert note =~ "processes on #{node()}: collection stopped at 5000 bytes"
+
+      assert note =~
+               "processes on #{node()}: only #{capped} rows were loaded, this node's share " <>
+                 "of the query's 5000-byte budget (max_bytes)"
+    end
+
+    test "are split evenly between the tables (and nodes) of a query" do
+      sql = "SELECT (SELECT count(*) FROM processes), (SELECT count(*) FROM ets_tables)"
+      [[processes, ets]] = Porthole.query!(sql, policy: Policy.new(max_bytes: 10_000)).rows
+
+      [[alone]] =
+        Porthole.query!("SELECT count(*) FROM processes", policy: Policy.new(max_bytes: 5_000)).rows
+
+      # Each table got half of the budget (give or take processes that came
+      # and went between the two queries).
+      assert abs(processes - alone) <= 3
+      assert ets > 0
     end
   end
 end

@@ -26,9 +26,11 @@ defmodule Porthole.Policy do
   @typedoc """
   * `:tiers` - enabled tiers.
   * `:nodes` - nodes that may be queried, or `:all`.
-  * `:max_rows` - rows collected per table, per node.
-  * `:max_bytes` - bytes collected per table, per node (rows beyond it are
-    dropped and the table is flagged as truncated).
+  * `:max_rows` - rows collected per table, per node (enforced on the node).
+  * `:max_bytes` - bytes loaded into the query engine per query, across all
+    nodes and tables: the querying node's memory budget for one query. Each
+    node and table gets an equal share; rows beyond a share are not loaded,
+    and the result says so.
   * `:max_result_rows` - rows returned.
   * `:max_window_ms` - longest sampling window.
   * `:timeout_ms` - budget for collecting and for running the SQL.
@@ -52,7 +54,7 @@ defmodule Porthole.Policy do
   defstruct tiers: [:observe],
             nodes: :all,
             max_rows: 50_000,
-            max_bytes: 10_000_000,
+            max_bytes: 50_000_000,
             max_result_rows: 500,
             max_window_ms: 60_000,
             timeout_ms: 10_000,

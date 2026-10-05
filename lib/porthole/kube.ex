@@ -334,8 +334,10 @@ defmodule Porthole.Kube do
                     env: env,
                     readinessProbe: %{httpGet: %{path: "/healthz", port: 4040}},
                     resources: %{
-                      requests: %{cpu: "50m", memory: "128Mi"},
-                      limits: %{memory: "256Mi"}
+                      # A query holds what it loads (up to max_bytes, 50 MB
+                      # by default) plus one node's rows; up to 4 at once.
+                      requests: %{cpu: "50m", memory: "256Mi"},
+                      limits: %{memory: "1Gi"}
                     },
                     # The image's user (uid 1000, by name in the Dockerfile).
                     securityContext: %{

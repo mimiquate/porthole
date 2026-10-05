@@ -411,7 +411,7 @@ config :porthole, :policy,
   nodes: [:"my_app@10.0.1.12", :"my_app@10.0.1.13"],
   # What one query may collect and return.
   max_rows: 50_000,          # rows per table, per node
-  max_bytes: 10_000_000,     # bytes per table, per node
+  max_bytes: 50_000_000,     # bytes loaded per query, split across nodes and tables
   max_result_rows: 200,
   max_window_ms: 30_000,
   timeout_ms: 10_000,        # collection deadline (enforced on each node) and SQL time
@@ -425,9 +425,12 @@ for that client, for example `queries_per_minute: 10` for a CI job.
 
 When a limit is hit, the query is not silently degraded:
 
-- **Collection limits** (`max_rows`, `max_bytes`) cut the rows and the result
-  says so in `notes`, e.g. *"processes on app@host: collection stopped at
-  10000000 bytes, aggregates are incomplete"*.
+- **Collection limits** cut the rows and the result says so in `notes`.
+  `max_rows` is enforced on each node (*"processes on app@host: collection
+  stopped at 50000 rows (max_rows)…"*). `max_bytes` is the querying node's
+  memory budget for one query: each node and table gets an equal share, and
+  rows beyond it are not loaded (*"processes on app@host: only 41210 rows
+  were loaded, this node's share of the query's 50000000-byte budget…"*).
 - **Load limits** reject the query with an error the agent can act on:
   `rate_limited` (*"60 queries per minute for this client; retry in 12s"*) or
   `busy` (*"4 queries are already running on this node; retry in a few
@@ -476,8 +479,9 @@ On each observed node, collection:
 - has a **deadline enforced on the node itself**: past `timeout_ms` (plus the
   window) the work is stopped there, not merely abandoned by the caller
   (Erlang's `:erpc` does not stop remote work when the caller times out);
-- is **capped** by `max_rows` per table; `max_bytes` caps what the querying
-  node loads per table and node.
+- is **capped** by `max_rows` per table. On the querying node, `max_bytes`
+  bounds what one query loads, and nodes are loaded one at a time as they
+  answer.
 
 Across the cluster, `max_concurrent` and `queries_per_minute` bound how much
 collection agents can trigger.
@@ -532,6 +536,12 @@ What that means in practice:
 - **Memory.** The rows are built on the node and copied once before being
   sent, so a `processes` query briefly holds about 200 bytes per process
   there (about 20 MB at 100k processes). `max_rows` bounds it.
+- **On the sidecar.** A query briefly holds what it loads (at most
+  `max_bytes`, 50 MB by default) plus one node's rows, about 2–3 KB per
+  process collected. In our measurements, the worst case (two nodes of 100k
+  processes, four queries at once) peaked at 675 MiB: give the sidecar 1 GiB,
+  as the Fly config and the Kubernetes setup do. For many large nodes, lower
+  `max_concurrent` or `max_bytes`.
 - **Volume.** With the defaults, at most 4 queries run at once across all
   clients, and each client runs at most 60 per minute. An agent that polls a
   large node every few seconds keeps a scheduler partly busy: lower

@@ -29,11 +29,39 @@ defmodule Porthole.Remote do
   """
   @spec run(node(), atom(), list(), pos_integer()) :: {:ok, term()} | {:error, term()}
   def run(node, name, args, budget) do
-    # Evaluated on the node:  Run = fun ..., Gather = fun ..., Run(Gather, Args, Budget)
+    with {:ok, encoded} <- run_encoded(node, name, args, budget) do
+      {:ok, :erlang.binary_to_term(encoded)}
+    end
+  end
+
+  @doc """
+  Like `run/4`, but returns the node's result as it arrives: encoded in one
+  binary (`:erlang.term_to_binary/1`, done on the node). A large binary is
+  shared between processes rather than copied, so the result can be handed
+  on and decoded only when it is needed.
+  """
+  @spec run_encoded(node(), atom(), list(), pos_integer()) :: {:ok, binary()} | {:error, term()}
+  def run_encoded(node, name, args, budget) do
+    # Evaluated on the node:
+    #   Run = fun ..., Gather = fun ...,
+    #   case Run(Gather, Args, Budget) of {ok, R} -> {ok, term_to_binary(R)}; E -> E end
     exprs = [
       {:match, 1, {:var, 1, :Run}, Porthole.Gather.Code.fun_expr(:with_deadline, 3)},
       {:match, 1, {:var, 1, :Gather}, Porthole.Gather.Code.fun_expr(name, length(args) + 1)},
-      {:call, 1, {:var, 1, :Run}, [{:var, 1, :Gather}, {:var, 1, :Args}, {:var, 1, :Budget}]}
+      {:case, 1,
+       {:call, 1, {:var, 1, :Run}, [{:var, 1, :Gather}, {:var, 1, :Args}, {:var, 1, :Budget}]},
+       [
+         {:clause, 1, [{:tuple, 1, [{:atom, 1, :ok}, {:var, 1, :R}]}], [],
+          [
+            {:tuple, 1,
+             [
+               {:atom, 1, :ok},
+               {:call, 1, {:remote, 1, {:atom, 1, :erlang}, {:atom, 1, :term_to_binary}},
+                [{:var, 1, :R}]}
+             ]}
+          ]},
+         {:clause, 1, [{:var, 1, :E}], [], [{:var, 1, :E}]}
+       ]}
     ]
 
     # A map, not the default orddict: the gather code binds many variables

@@ -223,9 +223,9 @@ spec:
           resources:
             requests:
               cpu: 50m
-              memory: 128Mi
-            limits:
               memory: 256Mi
+            limits:
+              memory: 1Gi              # queries briefly hold what they load (see max_bytes)
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000        # the image's user

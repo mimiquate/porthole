@@ -57,7 +57,10 @@ defmodule Porthole.Query do
   @spec run(String.t(), keyword()) :: {:ok, Result.t()} | {:error, Error.t()}
   def run(sql, opts \\ []) do
     :telemetry.span([:porthole, :query], %{sql: sql}, fn ->
-      result = do_run(sql, opts)
+      # In a process of its own: a query briefly holds a lot of data, and a
+      # long-lived caller (an HTTP connection) would otherwise keep the heap
+      # it grew to.
+      result = fn -> do_run(sql, opts) end |> Task.async() |> Task.await(:infinity)
       {result, %{sql: sql, result: result}}
     end)
   end
@@ -91,46 +94,125 @@ defmodule Porthole.Query do
 
   defp run_admitted(sql, nodes, window, policy, all_supervisors) do
     tables = for table <- Table.all(), sql =~ ~r/\b#{table.name()}\b/i, do: table
-    names = Enum.map(tables, & &1.name())
+    {:ok, conn} = Sqlite3.open(":memory:")
 
-    limits = %{
-      max_rows: policy.max_rows,
-      max_bytes: policy.max_bytes,
-      all_supervisors: all_supervisors
-    }
+    try do
+      {cuts, errors} = load(conn, tables, nodes, window, policy, all_supervisors)
 
-    {collected, errors} = Collector.collect(nodes, names, window, limits, policy.timeout_ms)
+      with {:ok, columns, rows, more?} <- execute(conn, sql, window, policy) do
+        {rows, shortened} = shorten_cells(rows)
 
-    with {:ok, columns, rows, more?} <- execute(sql, tables, collected, window, policy) do
-      {rows, shortened} = shorten_cells(rows)
+        notes =
+          List.flatten([
+            if(more?, do: "only the first #{policy.max_result_rows} rows are returned", else: []),
+            if(shortened > 0,
+              do: "#{shortened} cells were cut to #{@max_cell_bytes} bytes",
+              else: []
+            ),
+            for({name, node, cut} <- Enum.reverse(cuts), do: cut_note(name, node, cut, policy))
+          ])
 
-      notes =
-        List.flatten([
-          if(more?, do: "only the first #{policy.max_result_rows} rows are returned", else: []),
-          if(shortened > 0,
-            do: "#{shortened} cells were cut to #{@max_cell_bytes} bytes",
-            else: []
-          ),
-          for {node, tables} <- collected, {name, {_, cut}} <- tables, cut do
-            limit =
-              if cut == :bytes, do: "#{policy.max_bytes} bytes", else: "#{policy.max_rows} rows"
-
-            "#{name} on #{node}: collection stopped at #{limit}, aggregates are incomplete"
-          end
-        ])
-
-      {:ok,
-       %Result{
-         columns: columns,
-         rows: rows,
-         truncated: notes != [],
-         notes: notes,
-         errors: for({node, message} <- errors, do: %{node: to_string(node), message: message}),
-         nodes: Enum.map(nodes, &to_string/1),
-         window_ms: window
-       }}
+        {:ok,
+         %Result{
+           columns: columns,
+           rows: rows,
+           truncated: notes != [],
+           notes: notes,
+           errors: for({node, message} <- errors, do: %{node: to_string(node), message: message}),
+           nodes: Enum.map(nodes, &to_string/1),
+           window_ms: window
+         }}
+      end
+    after
+      Sqlite3.close(conn)
     end
   end
+
+  defp cut_note(name, node, {:rows, loaded}, policy),
+    do:
+      "#{name} on #{node}: collection stopped at #{policy.max_rows} rows (max_rows), " <>
+        "#{loaded} loaded; aggregates are incomplete"
+
+  defp cut_note(name, node, {:bytes, loaded}, policy),
+    do:
+      "#{name} on #{node}: only #{loaded} rows were loaded, this node's share of the " <>
+        "query's #{policy.max_bytes}-byte budget (max_bytes); aggregates are incomplete"
+
+  # Collects the tables and loads them into SQLite node by node, as each node
+  # answers, so the rows of only one node are held at a time. Every node and
+  # table gets an equal share of the policy's max_bytes; rows beyond a share
+  # are not loaded. Returns the cuts and the nodes that failed.
+  defp load(conn, tables, nodes, window, policy, all_supervisors) do
+    :ok = Sqlite3.execute(conn, "BEGIN")
+    inserts = Map.new(tables, &{&1, create_table(conn, &1, window != nil)})
+    share = div(policy.max_bytes, max(length(nodes) * length(tables), 1))
+    limits = %{max_rows: policy.max_rows, all_supervisors: all_supervisors}
+
+    {cuts, errors} =
+      Collector.reduce(
+        nodes,
+        Enum.map(tables, & &1.name()),
+        window,
+        limits,
+        policy.timeout_ms,
+        [],
+        fn
+          node, table, rows, truncated, cuts ->
+            {statement, columns} = inserts[table]
+
+            case insert(conn, statement, columns, Atom.to_string(node), rows, share) do
+              {:all, loaded} when truncated == :rows ->
+                [{table.name(), node, {:rows, loaded}} | cuts]
+
+              {:all, _loaded} ->
+                cuts
+
+              {:cut, loaded} ->
+                [{table.name(), node, {:bytes, loaded}} | cuts]
+            end
+        end
+      )
+
+    Enum.each(inserts, fn {_table, {statement, _}} -> Sqlite3.release(conn, statement) end)
+    :ok = Sqlite3.execute(conn, "COMMIT")
+    :ok = Sqlite3.set_authorizer(conn, @deny)
+    {cuts, errors}
+  end
+
+  defp create_table(conn, table, sampled?) do
+    columns = [{:node, :text, ""} | Table.columns(table, sampled?)]
+
+    definitions =
+      Enum.map_join(columns, ", ", fn {name, type, _doc} -> ~s("#{name}" #{sql_type(type)}) end)
+
+    placeholders = Enum.map_join(columns, ", ", fn _ -> "?" end)
+    :ok = Sqlite3.execute(conn, ~s[CREATE TABLE "#{table.name()}" (#{definitions})])
+
+    {:ok, statement} =
+      Sqlite3.prepare(conn, ~s[INSERT INTO "#{table.name()}" VALUES (#{placeholders})])
+
+    {statement, for({name, _, _} <- tl(columns), do: name)}
+  end
+
+  # Inserts rows until `budget` bytes are loaded.
+  defp insert(conn, statement, columns, node, rows, budget) do
+    Enum.reduce_while(rows, {:all, 0, 0}, fn row, {:all, loaded, bytes} ->
+      values = [node | Enum.map(columns, &sql_value(row[&1]))]
+      bytes = bytes + Enum.reduce(values, 0, &(value_bytes(&1) + &2))
+
+      if bytes > budget do
+        {:halt, {:cut, loaded, bytes}}
+      else
+        :ok = Sqlite3.bind(statement, values)
+        :done = Sqlite3.step(conn, statement)
+        {:cont, {:all, loaded + 1, bytes}}
+      end
+    end)
+    |> then(fn {status, loaded, _bytes} -> {status, loaded} end)
+  end
+
+  defp value_bytes(value) when is_binary(value), do: byte_size(value)
+  defp value_bytes(_number_or_nil), do: 8
 
   defp check_window(nil, _policy), do: :ok
 
@@ -162,44 +244,11 @@ defmodule Porthole.Query do
     ArgumentError -> {:error, Error.new(:bad_request, "unknown node in #{inspect(names)}")}
   end
 
-  defp execute(sql, tables, collected, window, policy) do
-    {:ok, conn} = Sqlite3.open(":memory:")
-
-    try do
-      :ok = Sqlite3.execute(conn, "BEGIN")
-      Enum.each(tables, &load(conn, &1, collected, window != nil))
-      :ok = Sqlite3.execute(conn, "COMMIT")
-      :ok = Sqlite3.set_authorizer(conn, @deny)
-
-      case Sqlite3.prepare(conn, sql) do
-        {:ok, statement} -> fetch(conn, statement, policy)
-        {:error, message} -> {:error, sql_error(message, window)}
-      end
-    after
-      Sqlite3.close(conn)
+  defp execute(conn, sql, window, policy) do
+    case Sqlite3.prepare(conn, sql) do
+      {:ok, statement} -> fetch(conn, statement, policy)
+      {:error, message} -> {:error, sql_error(message, window)}
     end
-  end
-
-  defp load(conn, table, collected, sampled?) do
-    columns = [{:node, :text, ""} | Table.columns(table, sampled?)]
-
-    definitions =
-      Enum.map_join(columns, ", ", fn {name, type, _doc} -> ~s("#{name}" #{sql_type(type)}) end)
-
-    placeholders = Enum.map_join(columns, ", ", fn _ -> "?" end)
-
-    :ok = Sqlite3.execute(conn, ~s[CREATE TABLE "#{table.name()}" (#{definitions})])
-
-    {:ok, insert} =
-      Sqlite3.prepare(conn, ~s[INSERT INTO "#{table.name()}" VALUES (#{placeholders})])
-
-    for {node, tables} <- collected, row <- elem(tables[table.name()], 0) do
-      row = Map.put(row, :node, Atom.to_string(node))
-      :ok = Sqlite3.bind(insert, Enum.map(columns, fn {name, _, _} -> sql_value(row[name]) end))
-      :done = Sqlite3.step(conn, insert)
-    end
-
-    Sqlite3.release(conn, insert)
   end
 
   defp fetch(conn, statement, policy) do

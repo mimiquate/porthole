@@ -100,7 +100,15 @@ defmodule Porthole.Gather do
     # node) wherever possible. Compared with mapping a function over each
     # item, this made evaluation ~25% faster and the result 2.5x smaller
     # (100k processes: 1.7 s -> 1.3 s, 47 MB -> 19 MB).
-    all = :lists.delete(caller, :lists.delete(:erlang.self(), :erlang.processes()))
+    # Left out: this worker, the process it runs for and, for a query run in
+    # a task, the processes waiting on it ($callers).
+    callers =
+      case :erlang.process_info(caller, {:dictionary, :"$callers"}) do
+        {_, [_ | _] = pids} -> pids
+        _none -> []
+      end
+
+    all = :erlang.processes() -- [:erlang.self(), caller | callers]
 
     items = [
       :registered_name,
