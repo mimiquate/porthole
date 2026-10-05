@@ -132,12 +132,17 @@ spec:
               app.kubernetes.io/managed-by: porthole
 ```
 
-**Open-files limit.** The BEAM sizes its port table from the process's
-open-files limit. Some container runtimes set that limit to about a billion
-(containerd as configured by kind, and some self-managed clusters), and the
-VM then reserves gigabytes at start, which a memory limit turns into an
-`OOMKilled`. The sidecar image caps it (`ERL_MAX_PORTS=65536`). If your own
-app's pods are affected, set the same variable on them.
+**Open-files limit.** This is a known BEAM issue, not specific to
+Porthole. The VM sizes its port table from the process's open-files limit,
+and recent systemd (RHEL 9, Fedora, Arch), containerd 2.x and kind set that
+limit to about a billion. The VM then reserves gigabytes at start, which a
+memory limit turns into an `OOMKilled`; without a limit, it shows up as an
+idle node using gigabytes ([RabbitMQ's write-up](https://www.rabbitmq.com/blog/2022/08/30/high-initial-memory-consumption-of-rabbitmq-nodes-on-centos-stream-9)).
+The sidecar's release caps its port table (`+Q 65536`), wherever it runs.
+If your own app's pods are affected, cap theirs: set `ERL_MAX_PORTS=65536`
+on them (RabbitMQ recommends 50,000 to 100,000), or add `+Q 65536` to the
+release's `rel/vm.args.eex`. Kubernetes has no per-pod setting for the
+open-files limit itself.
 
 ## Set it up to stay
 

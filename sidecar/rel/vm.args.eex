@@ -1,3 +1,9 @@
 ## The sidecar joins the cluster as a hidden node: it does not show up in the
 ## application's Node.list/0 and does not take part in the full mesh.
 -hidden
+
+## At most 65536 ports. Without it, the VM sizes its port table from the
+## open-files limit, which recent systemd and some container runtimes
+## (containerd 2.x, kind) set to about a billion: it then reserves gigabytes at
+## start, and a memory limit gets it killed. The sidecar needs few ports.
++Q 65536

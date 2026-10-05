@@ -57,10 +57,8 @@ USER porthole
 # Long names, as clusters usually use (-name app@10.0.1.12). Set RELEASE_NODE
 # (e.g. porthole@$POD_IP), RELEASE_COOKIE and the PORTHOLE_* variables.
 ENV RELEASE_DISTRIBUTION=name PORTHOLE_PORT=4040
-# The BEAM sizes its port table from the open-files limit, which some
-# container runtimes set to about a billion (containerd, as in kind): that
-# reserves gigabytes and gets the sidecar OOM-killed at start. It needs few
-# ports.
+# The release caps the port table itself (+Q 65536 in sidecar/rel/vm.args.eex);
+# this also covers anything else started with this image's runtime.
 ENV ERL_MAX_PORTS=65536
 EXPOSE 4040
 

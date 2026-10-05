@@ -77,9 +77,13 @@ when a real question needs it.
   fingerprint annotation on the pod template rolls the sidecar when tokens change (pods read
   Secrets only at start). Verified on kind 2026-10-05 (Secret cookie, build-time cookie,
   NetworkPolicy deny and allow, permanent-sidecar refusal, the permanent manifest).
-  Lesson: containerd as configured by kind sets the open-files limit to ~1e9, and the BEAM
-  sizes its port table from it, reserving GBs: OOMKilled at start under a memory limit. The
-  sidecar image sets `ERL_MAX_PORTS=65536`.
+  Lesson (a known BEAM issue, see RabbitMQ's 2022 write-up): recent systemd, containerd 2.x
+  and kind set the open-files limit to ~1e9; the VM sizes its port table from it (up to
+  134M ports), reserving GBs: OOMKilled at start under a memory limit. The sidecar release
+  sets `+Q 65536` in `sidecar/rel/vm.args.eex` (the image also sets `ERL_MAX_PORTS`).
+  Verified in Docker with `--ulimit nofile=1073741816`: OOMKilled without the cap, runs with
+  `+Q` alone. Idle sidecar on an 8-core host: ~60 MiB VM, ~140 MiB container (scheduler
+  allocators, stacks); its peak during large queries under the 256 MiB limit is unmeasured.
 - **Sidecar image**: `.github/workflows/sidecar-image.yml` publishes `sidecar/Dockerfile` to
   `ghcr.io/mimiquate/porthole-sidecar` for amd64 and arm64: `:latest` and `:sha-…` from
   `main`, `:X.Y.Z` from `vX.Y.Z` tags. The package must be public for Fly and clusters to
