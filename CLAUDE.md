@@ -118,8 +118,12 @@ when a real question needs it.
   2026-10-02: all 15 `process_info` items for 100k processes take 144 ms compiled, and no
   item dominates (each costly one is 60–90 ms alone, mostly shared overhead), so pruning
   items would save little. The cost is in evaluation (below), not in the items.
-- Phase 2 of the production roadmap, remaining: Kubernetes is verified on kind only, not on
-  a managed cluster (guides/deploy-kubernetes.md says so). Fly.io is verified in production (2026-10-01, elixir_toolbox /
+- Phase 2 of the production roadmap: Kubernetes is verified on EKS (2026-10-05, 1.34, 2
+  Graviton nodes, Phoenix 1.8 + dns_cluster, OTP 29 app / OTP 27 sidecar; see the guide's
+  status) and kind; GKE/AKS untested. EKS findings: AL2023 nodes set nofile to 65536 (no
+  port-table issue); `kubectl auth can-i create pods/exec` asks about pods named "exec":
+  subresources need `--subresource=exec` (fixed); 2 × 100k-process nodes: count 6 s, 5 s
+  window 18 s, 4 concurrent ~12 s each, sidecar peak 513 MiB. Fly.io is verified in production (2026-10-01, elixir_toolbox /
   ex-tools, guides/deploy-fly.md): discovery from `ex-tools.internal` with image-id node
   names, IPv6, `fly proxy`, a real agent querying. First-deploy lesson: a cookie copied by
   hand differed from the app's ("Invalid challenge reply" in the app's logs); Fly secret

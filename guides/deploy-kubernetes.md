@@ -13,11 +13,15 @@ dependency, is not redeployed, and none of its objects are modified.
 - **[Set it up to stay](#set-it-up-to-stay):** a short manifest your team
   keeps with its other ones.
 
-> **Status:** new. Verified end to end on [kind](https://kind.sigs.k8s.io)
-> (Kubernetes 1.37): a two-pod app with its cookie in a Secret, one with a
-> cookie generated at build time, a NetworkPolicy that blocks the sidecar
-> and the rule that lets it in. Not yet run on a managed cluster (EKS, GKE,
-> AKS...): please open an issue if a step fails.
+> **Status:** new. Verified on Amazon EKS (Kubernetes 1.34, October 2026)
+> with a fresh Phoenix 1.8 app clustered by `dns_cluster` across two
+> Graviton nodes: cookie in a Secret and cookie generated at build time,
+> scaling 3 → 5 → 2 and a rolling deploy (the sidecar follows within
+> seconds), NetworkPolicies enforced by the AWS VPC CNI (blocked, then the
+> rule below), a user without exec permission (refused before anything is
+> created), and two nodes of 100k processes (peak 513 MiB with four
+> queries at once). Also verified on [kind](https://kind.sigs.k8s.io).
+> GKE and AKS are untested: please open an issue if a step fails.
 
 ## What your app needs
 
@@ -142,7 +146,8 @@ The sidecar's release caps its port table (`+Q 65536`), wherever it runs.
 If your own app's pods are affected, cap theirs: set `ERL_MAX_PORTS=65536`
 on them (RabbitMQ recommends 50,000 to 100,000), or add `+Q 65536` to the
 release's `rel/vm.args.eex`. Kubernetes has no per-pod setting for the
-open-files limit itself.
+open-files limit itself. On EKS (Amazon Linux 2023 nodes) the limit is
+65,536, so apps there are not affected.
 
 ## Set it up to stay
 

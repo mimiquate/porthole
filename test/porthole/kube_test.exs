@@ -108,6 +108,13 @@ defmodule Porthole.KubeTest do
     refute calls.() =~ "exec deployment"
   end
 
+  test "asks about exec and port-forward as subresources", %{calls: calls} do
+    Kube.check_permissions!([namespace: "prod"], true)
+    assert calls.() =~ "auth can-i create pods --subresource=exec"
+    assert calls.() =~ "auth can-i create pods --subresource=portforward"
+    refute calls.() =~ "pods/exec"
+  end
+
   test "never takes over a Deployment it did not create", %{answer: answer, calls: calls} do
     answer.(
       "get-deployment-shop-porthole",

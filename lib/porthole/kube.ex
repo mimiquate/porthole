@@ -174,19 +174,24 @@ defmodule Porthole.Kube do
   """
   @spec check_permissions!(keyword(), boolean()) :: :ok
   def check_permissions!(opts, exec?) do
+    # Subresources must be asked with --subresource: `can-i create pods/exec`
+    # asks about pods named "exec" (verified on EKS: it answered yes for a
+    # user that could not exec).
     needed =
       [
-        {"create", "deployments.apps"},
-        {"create", "secrets"},
-        {"create", "services"},
-        {"create", "pods/portforward"}
-      ] ++ if(exec?, do: [{"create", "pods/exec"}], else: [])
+        {"create", "deployments.apps", nil},
+        {"create", "secrets", nil},
+        {"create", "services", nil},
+        {"create", "pods", "portforward"}
+      ] ++ if(exec?, do: [{"create", "pods", "exec"}], else: [])
 
     missing =
-      for {verb, resource} <- needed,
-          kubectl(scope(opts) ++ ["auth", "can-i", verb, resource]) |> elem(0) |> String.trim() !=
-            "yes",
-          do: "#{verb} #{resource}"
+      for {verb, resource, subresource} <- needed,
+          sub = if(subresource, do: ["--subresource=#{subresource}"], else: []),
+          kubectl(scope(opts) ++ ["auth", "can-i", verb, resource | sub])
+          |> elem(0)
+          |> String.trim() != "yes",
+          do: "#{verb} #{resource}#{if subresource, do: "/#{subresource}"}"
 
     if missing != [] do
       Mix.raise("you are not allowed to: #{Enum.join(missing, ", ")} (in this namespace)")
