@@ -36,8 +36,9 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
       (default: your user name).
     * `--image IMAGE` - the sidecar image to deploy (default: the published
       `ghcr.io/mimiquate/porthole-sidecar:latest`).
-    * `--build` - build the sidecar from this checkout instead of deploying a
-      published image (e.g. to try local changes).
+    * `--build` - build the sidecar from source instead of deploying the
+      published image (e.g. to try local changes); run it from a checkout of
+      Porthole.
 
   Set `PORTHOLE_FLY` to use a `fly` executable that is not on the `PATH`.
   """

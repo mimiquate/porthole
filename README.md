@@ -18,7 +18,32 @@ in about two minutes, made one wrong claim, and along the way copied a whole
 mailbox and a whole ETS table, ran application code and enabled tracing on a
 live process.
 
-## Usage
+## Try it on your production app
+
+Porthole is not a dependency of your app. It runs next to it, as a separate
+sidecar that holds the app's cookie: agents get a URL and a token, never the
+cookie. Your app is not changed or redeployed; any Elixir app on OTP 27+
+whose nodes are clustered with long names works.
+
+```console
+$ mix archive.install github mimiquate/porthole   # once; remove it with: mix archive.uninstall porthole
+$ mix porthole.fly.up my-app                     # on Fly.io
+$ mix porthole.k8s.up my-app --namespace prod    # or on Kubernetes (my-app is the Deployment)
+```
+
+`up` reads your app's settings, deploys the sidecar, checks that it sees
+your nodes, and prints the two commands left: the tunnel, and the one that
+connects your agent. `mix porthole.fly.down my-app` (or `k8s.down`) removes
+everything. Details: [Fly.io](guides/deploy-fly.md),
+[Kubernetes](guides/deploy-kubernetes.md).
+
+To install nothing at all, run the same commands through `Mix.install`:
+
+```console
+$ elixir -e 'Mix.install([{:porthole, github: "mimiquate/porthole"}]); Mix.Task.run("porthole.fly.up", ["my-app"])'
+```
+
+## Other ways to use it
 
 ```console
 # Try it on a tree of deliberately misbehaving processes (dev only)

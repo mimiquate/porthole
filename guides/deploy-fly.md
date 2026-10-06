@@ -19,11 +19,16 @@ dependency and is not redeployed.
 > including one without a fixed cookie and without Porthole as a
 > dependency. Please open an issue if a step fails.
 
-From a checkout of this repository, with `fly` logged in:
+With `fly` logged in to your app's organization:
 
 ```console
+$ mix archive.install github mimiquate/porthole   # once
 $ mix porthole.fly.up my-app
 ```
+
+Your app needs nothing from Porthole: the archive only adds the `mix
+porthole.*` commands to your machine, and `mix archive.uninstall porthole`
+removes them.
 
 It creates a separate Fly app, `my-app-porthole`, in your app's organization
 and region, then:
@@ -33,8 +38,9 @@ and region, then:
    and the agent never gets it;
 2. generates a token for you;
 3. deploys the sidecar from the published image
-   (`ghcr.io/mimiquate/porthole-sidecar`; `--build` builds it from your
-   checkout instead) and checks that it sees your app's nodes;
+   (`ghcr.io/mimiquate/porthole-sidecar`; run from a checkout of this
+   repository, `--build` builds it from source instead) and checks that it
+   sees your app's nodes;
 4. prints the two commands that remain: the tunnel and the agent.
 
 ```text

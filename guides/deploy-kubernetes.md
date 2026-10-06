@@ -39,11 +39,16 @@ The cookie can come from a Secret (`RELEASE_COOKIE` from `secretKeyRef` or
 
 ## Try it: two commands
 
-From a checkout of this repository, with `kubectl` pointing at the cluster:
+With `kubectl` pointing at the cluster:
 
 ```console
+$ mix archive.install github mimiquate/porthole   # once
 $ mix porthole.k8s.up my-app --namespace prod
 ```
+
+Your app needs nothing from Porthole: the archive only adds the `mix
+porthole.*` commands to your machine, and `mix archive.uninstall porthole`
+removes them.
 
 `my-app` is your app's Deployment. Next to it, in the same namespace, it
 creates a sidecar called `my-app-porthole`:
