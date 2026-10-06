@@ -8,7 +8,32 @@ defmodule Porthole.Fly do
 
   alias Porthole.Trial
 
+  # The sidecar's Fly config, embedded when Porthole is compiled, so `fly.up`
+  # runs from an installed Porthole (Mix.install, an archive), not only from a
+  # checkout. sidecar/fly.toml stays the single source; the Hex package ships it.
+  @config_path Path.expand("../../sidecar/fly.toml", __DIR__)
+  @external_resource @config_path
+  @config File.read!(@config_path)
+
   @type app :: %{name: String.t(), org: String.t(), region: String.t(), machines: pos_integer()}
+
+  @doc """
+  Writes the sidecar's Fly config to a temporary file, runs `fun` with its
+  path, and deletes it.
+  """
+  @spec with_config((Path.t() -> result)) :: result when result: term()
+  def with_config(fun) do
+    dir = Path.join(System.tmp_dir!(), "porthole-fly-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+    path = Path.join(dir, "fly.toml")
+    File.write!(path, @config)
+
+    try do
+      fun.(path)
+    after
+      File.rm_rf(dir)
+    end
+  end
 
   @doc "The `fly` executable: `PORTHOLE_FLY`, or `fly` on the PATH."
   @spec executable() :: String.t()

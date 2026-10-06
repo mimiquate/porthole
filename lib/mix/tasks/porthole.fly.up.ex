@@ -68,7 +68,8 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
     name_option = if opts[:name], do: " --name #{sidecar}", else: ""
 
     app = Fly.app(app_name)
-    deploy = deploy_args(sidecar, app.region, opts)
+    # Checks --image/--build before anything is created.
+    _ = deploy_args(sidecar, app.region, opts, "fly.toml")
 
     shell.info("Reading #{app_name}'s distribution settings from its running release...")
     release = Fly.release(app_name)
@@ -102,7 +103,13 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
 
     shell.info("Deploying #{sidecar} (observing #{dns})...")
     env = ["--env", "DNS_CLUSTER_QUERY=#{dns}", "--env", "#{Trial.trial_marker()}=true"]
-    Fly.run!(deploy ++ env, "could not deploy #{sidecar}")
+
+    Fly.with_config(fn config ->
+      Fly.run!(
+        deploy_args(sidecar, app.region, opts, config) ++ env,
+        "could not deploy #{sidecar}"
+      )
+    end)
 
     shell.info("Checking what #{sidecar} observes...")
 
@@ -162,29 +169,26 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
   end
 
   @doc false
-  # The `fly deploy` arguments: the published image by default, `--image`, or
-  # a build from this checkout with `--build`.
-  @spec deploy_args(String.t(), String.t(), keyword()) :: [String.t()]
-  def deploy_args(sidecar, region, opts) do
-    root = Path.expand("../../..", __DIR__)
-    config = Path.join(root, "sidecar/fly.toml")
-    dockerfile = Path.join(root, "sidecar/Dockerfile")
-
-    unless File.exists?(config) do
-      Mix.raise("sidecar/fly.toml not found in #{root}: run this from a checkout of Porthole")
-    end
-
+  # The `fly deploy` arguments, with `config` the sidecar's fly.toml: the
+  # published image by default, `--image`, or a build from a checkout of
+  # Porthole with `--build`.
+  @spec deploy_args(String.t(), String.t(), keyword(), Path.t()) :: [String.t()]
+  def deploy_args(sidecar, region, opts, config) do
     common = ["--config", config, "--app", sidecar, "--primary-region", region, "--ha=false"]
 
     cond do
       opts[:build] && opts[:image] ->
         Mix.raise("pass either --image or --build, not both")
 
-      opts[:build] && File.exists?(dockerfile) ->
-        ["deploy", root | common] ++ ["--dockerfile", dockerfile]
-
       opts[:build] ->
-        Mix.raise("sidecar/Dockerfile not found in #{root}: --build needs a checkout of Porthole")
+        root = Path.expand("../../..", __DIR__)
+        dockerfile = Path.join(root, "sidecar/Dockerfile")
+
+        unless File.exists?(dockerfile) do
+          Mix.raise("--build builds the sidecar from source: run it from a checkout of Porthole")
+        end
+
+        ["deploy", root | common] ++ ["--dockerfile", dockerfile]
 
       true ->
         ["deploy" | common] ++ ["--image", opts[:image] || Trial.default_image()]

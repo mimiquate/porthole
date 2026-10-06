@@ -51,6 +51,9 @@ defmodule Porthole.MixProject do
   defp package do
     [
       licenses: ["Apache-2.0"],
+      # sidecar/fly.toml is embedded by Porthole.Fly, so `mix porthole.fly.up`
+      # works from an installed package.
+      files: ~w(lib mix.exs README.md .formatter.exs sidecar/fly.toml),
       links: %{"GitHub" => @source_url}
     ]
   end

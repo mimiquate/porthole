@@ -96,6 +96,11 @@ when a real question needs it.
   Memory grows with `max_concurrent` × (`max_bytes` loaded + one node's rows + other nodes'
   encoded results waiting): for many large nodes, lower `max_concurrent` or `max_bytes`.
   Not done (≈15 MiB per query): shaping rows lazily instead of as a list per table.
+- **Compiled fast path: parked on branch `compiled-fast-path`** (2026-10-06, not merged by
+  decision). Nodes whose `Porthole.Gather` source fingerprint matches the sidecar's run it
+  compiled instead of evaluated: 5–7× less work on idle nodes, but little gain when the node
+  is saturated, and it rewards keeping app and sidecar versions in lock-step. Revisit if real
+  users with large nodes report collection CPU cost.
 - **Sidecar image**: `.github/workflows/sidecar-image.yml` publishes `sidecar/Dockerfile` to
   `ghcr.io/mimiquate/porthole-sidecar` for amd64 and arm64: `:latest` and `:sha-…` from
   `main`, `:X.Y.Z` from `vX.Y.Z` tags. The package must be public for Fly and clusters to

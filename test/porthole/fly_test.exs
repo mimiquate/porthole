@@ -140,21 +140,31 @@ defmodule Porthole.FlyTest do
   test "deploys the published image by default, or builds from the checkout with --build" do
     alias Mix.Tasks.Porthole.Fly.Up
 
-    default = Up.deploy_args("shop-porthole", "ewr", [])
+    default = Up.deploy_args("shop-porthole", "ewr", [], "fly.toml")
     assert ["deploy" | _] = default
     assert Enum.take(default, -2) == ["--image", "ghcr.io/mimiquate/porthole-sidecar:latest"]
     refute "--dockerfile" in default
 
-    assert Enum.take(Up.deploy_args("shop-porthole", "ewr", image: "mine:1"), -2) ==
+    assert Enum.take(Up.deploy_args("shop-porthole", "ewr", [image: "mine:1"], "fly.toml"), -2) ==
              ["--image", "mine:1"]
 
-    built = Up.deploy_args("shop-porthole", "ewr", build: true)
+    built = Up.deploy_args("shop-porthole", "ewr", [build: true], "fly.toml")
     assert "--dockerfile" in built
     refute "--image" in built
 
     assert_raise Mix.Error, ~r/either --image or --build/, fn ->
-      Up.deploy_args("shop-porthole", "ewr", build: true, image: "mine:1")
+      Up.deploy_args("shop-porthole", "ewr", [build: true, image: "mine:1"], "fly.toml")
     end
+  end
+
+  test "the sidecar's Fly config travels with the code, not the checkout" do
+    config =
+      Porthole.Fly.with_config(fn path ->
+        assert File.exists?(path)
+        File.read!(path)
+      end)
+
+    assert config == File.read!("sidecar/fly.toml")
   end
 
   test "an unknown app is a clear error" do
