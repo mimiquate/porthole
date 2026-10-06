@@ -399,7 +399,12 @@ engineering team, but it is a deliberate grant: scope tokens with policies.
 
 The requests are checked before any work is done: missing or unknown tokens
 get `401`, requests from browsers (with an `Origin` header) get `403` unless
-allowed with `:allowed_origins`, and bodies over 1 MB are rejected.
+allowed with `:allowed_origins`, and bodies over 1 MB are rejected. A
+client can narrow the nodes a query covers (the tool's `nodes` argument),
+but never reach nodes outside the ones the server queries. SQLite's memory
+is capped, sized from the policy (about 450 MB with the defaults), so a
+query that builds huge values in SQL fails with an error instead of
+exhausting the sidecar's memory.
 
 ### Policy
 

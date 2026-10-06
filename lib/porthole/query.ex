@@ -43,6 +43,9 @@ defmodule Porthole.Query do
     * `:nodes` - `nil` (this node), `:all` (this node and every connected
       one), a list of node names, or a zero-arity function returning one of
       those, called for every query (e.g. a sidecar's current cluster).
+    * `:only_nodes` - a subset of those, requested by a client (the MCP
+      tool's `nodes` argument). It can only narrow `:nodes` (with no `:nodes`,
+      this node and the connected ones); any other node is refused.
     * `:policy` - the session `Porthole.Policy`.
     * `:client` - who is asking (e.g. a token id). Identified clients are
       subject to the policy's `:queries_per_minute`; every query is subject
@@ -82,6 +85,7 @@ defmodule Porthole.Query do
     with :ok <- Policy.authorize(policy, :observe),
          :ok <- check_window(window, policy),
          {:ok, nodes} <- nodes(opts[:nodes]),
+         {:ok, nodes} <- only(nodes, opts[:only_nodes], opts[:nodes]),
          :ok <- Policy.authorize_nodes(policy, nodes),
          {:ok, ticket} <- Limiter.acquire(opts[:client], policy) do
       try do
@@ -99,6 +103,7 @@ defmodule Porthole.Query do
     # are created empty.
     listed = if sql =~ ~r/\bsqlite_(master|schema)\b/i, do: Table.all() -- tables, else: []
     {:ok, conn} = Sqlite3.open(":memory:")
+    :ok = Sqlite3.execute(conn, "PRAGMA hard_heap_limit = #{sqlite_heap_limit()}")
 
     try do
       {cuts, errors} = load(conn, tables, listed, nodes, window, policy, all_supervisors)
@@ -134,9 +139,26 @@ defmodule Porthole.Query do
            window_ms: window
          }}
       end
+    catch
+      # SQLite reached its heap limit while loading the rows.
+      {:sqlite, message} -> {:error, sql_error(message, window)}
     after
       Sqlite3.close(conn)
     end
+  end
+
+  # SQL functions (zeroblob, hex, printf, string concatenation in a recursive
+  # CTE...) can build values of any size inside SQLite, outside every
+  # Porthole limit: one query could take gigabytes and get the querying node
+  # killed. SQLite's heap is capped instead (process-wide, set by Porthole;
+  # agents cannot run PRAGMA), at what the environment policy lets queries
+  # load at once, with room for SQLite's own overhead. Past it, the query
+  # fails with "out of memory".
+  @doc false
+  @spec sqlite_heap_limit() :: pos_integer()
+  def sqlite_heap_limit do
+    policy = Policy.environment()
+    policy.max_concurrent * 2 * policy.max_bytes + 64 * 1_048_576
   end
 
   defp cut_note(name, node, {:rows, loaded}, policy),
@@ -221,8 +243,11 @@ defmodule Porthole.Query do
         {:halt, {:cut, loaded, bytes}}
       else
         :ok = Sqlite3.bind(statement, values)
-        :done = Sqlite3.step(conn, statement)
-        {:cont, {:all, loaded + 1, bytes}}
+
+        case Sqlite3.step(conn, statement) do
+          :done -> {:cont, {:all, loaded + 1, bytes}}
+          {:error, message} -> throw({:sqlite, message})
+        end
       end
     end)
     |> then(fn {status, loaded, _bytes} -> {status, loaded} end)
@@ -261,6 +286,35 @@ defmodule Porthole.Query do
     ArgumentError -> {:error, Error.new(:bad_request, "unknown node in #{inspect(names)}")}
   end
 
+  defp nodes(other),
+    do:
+      {:error,
+       Error.new(:bad_request, "nodes must be a list of node names, got #{inspect(other)}")}
+
+  # A request (e.g. the MCP tool's `nodes` argument) can only narrow the nodes
+  # the server queries (its discovered cluster), never reach other ones. With
+  # no server-side setting, those are this node and the connected ones.
+  defp only(nodes, nil, _server), do: {:ok, nodes}
+
+  defp only(nodes, requested, server) do
+    allowed = if server == nil, do: [node() | Node.list()], else: nodes
+
+    with {:ok, requested} <- nodes(requested) do
+      case requested -- allowed do
+        [] ->
+          {:ok, requested}
+
+        other ->
+          {:error,
+           Error.new(
+             :not_allowed,
+             "#{Enum.join(other, ", ")}: not among the nodes this server queries " <>
+               "(#{Enum.join(allowed, ", ")})"
+           )}
+      end
+    end
+  end
+
   defp execute(conn, sql, window, policy) do
     case Sqlite3.prepare(conn, sql) do
       {:ok, statement} -> fetch(conn, statement, policy)
@@ -289,7 +343,7 @@ defmodule Porthole.Query do
                :timeout,
                "the query ran longer than #{policy.timeout_ms}ms and was cancelled"
              )},
-          else: {:error, Error.new(:sql_error, message)}
+          else: {:error, sql_error(message, nil)}
     end
   end
 
@@ -312,6 +366,14 @@ defmodule Porthole.Query do
 
   defp sql_error(message, window) do
     cond do
+      message =~ "out of memory" ->
+        Error.new(
+          :sql_error,
+          "the query needed more memory than Porthole lets SQLite use " <>
+            "(#{div(sqlite_heap_limit(), 1_048_576)} MB): it builds very large values or " <>
+            "intermediate results. Aggregate, or select fewer or shorter columns"
+        )
+
       message =~ "not authorized" ->
         Error.new(:read_only, "Porthole is read-only: only SELECT queries are allowed")
 

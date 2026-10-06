@@ -168,6 +168,14 @@ composable; it is not a storage layer.
 Read-only is enforced by a SQLite authorizer (installed after loading) that denies writes,
 `ATTACH`, `PRAGMA` and schema changes. Don't add SQL-level validation on top of it.
 
+SQLite's heap is capped (`PRAGMA hard_heap_limit`, set by Porthole before loading; process-wide;
+`max_concurrent` × 2 × `max_bytes` + 64 MiB, ~445 MiB by default). Found in the security review
+(2026-10-06): one query (`hex(zeroblob(N))`, a string doubled in a recursive CTE) could make
+SQLite allocate gigabytes, outside every Porthole limit, and get the sidecar OOM-killed. Past
+the cap the query fails with a clear error. A client's `nodes` argument (`:only_nodes`) can only
+narrow the server's node set (before, it replaced it, letting a token holder target any node
+whose name was an existing atom); malformed values are a bad request, not a crash.
+
 Per-query collection was chosen over periodic sampling on purpose: no cost when nobody is
 looking, answers are exact "now", no state. History is out of scope.
 

@@ -94,7 +94,7 @@ defmodule Porthole.MCP do
     request_opts =
       for {key, value} <- [
             window_ms: args["window_ms"],
-            nodes: args["nodes"],
+            only_nodes: args["nodes"],
             all_supervisors: args["all_supervisors"]
           ],
           value != nil,
@@ -136,7 +136,8 @@ defmodule Porthole.MCP do
           nodes: %{
             type: "array",
             items: %{type: "string"},
-            description: "Nodes to query. Default: the target node."
+            description:
+              "Nodes to query, among those this server queries by default. Default: all of them."
           },
           all_supervisors: %{
             type: "boolean",

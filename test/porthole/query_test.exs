@@ -34,6 +34,37 @@ defmodule Porthole.QueryTest do
     assert n > 0
   end
 
+  test "a query cannot make SQLite allocate unbounded memory" do
+    for sql <- [
+          "SELECT length(hex(zeroblob(900000000)))",
+          # A string doubled 40 times.
+          "WITH RECURSIVE r(s, n) AS (SELECT 'x', 0 UNION ALL SELECT s || s, n + 1 FROM r " <>
+            "WHERE n < 40) SELECT max(length(s)) FROM r"
+        ] do
+      assert {:error, %Error{reason: :sql_error, message: message}} = Porthole.query(sql)
+      assert message =~ "more memory than Porthole lets SQLite use"
+    end
+
+    # Ordinary queries are unaffected.
+    assert [[_]] = Porthole.query!("SELECT count(*) FROM processes").rows
+  end
+
+  test "a client can narrow the nodes a server queries, never widen them" do
+    server = [nodes: fn -> [node()] end]
+
+    assert %{nodes: [_]} =
+             Porthole.query!("SELECT 1", server ++ [only_nodes: [to_string(node())]])
+
+    # An existing atom that names another node, outside the server's set.
+    assert {:error, %Error{reason: :not_allowed}} =
+             Porthole.query("SELECT 1", server ++ [only_nodes: [to_string(:intruder@elsewhere)]])
+
+    for bad <- ["x", 42, %{"a" => 1}] do
+      assert {:error, %Error{reason: :bad_request}} =
+               Porthole.query("SELECT 1", server ++ [only_nodes: bad])
+    end
+  end
+
   test "writes are denied by SQLite itself" do
     for sql <- [
           "DELETE FROM processes",
