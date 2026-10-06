@@ -33,6 +33,8 @@ WORKDIR /src
 # local development tokens).
 COPY mix.exs mix.lock ./
 COPY lib lib
+# Embedded by Porthole.Fly when the library compiles (for mix porthole.fly.up).
+COPY sidecar/fly.toml sidecar/fly.toml
 COPY sidecar/mix.exs sidecar/mix.lock sidecar/
 COPY sidecar/lib sidecar/lib
 COPY sidecar/rel sidecar/rel
