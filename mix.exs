@@ -74,7 +74,7 @@ defmodule Porthole.MixProject do
         "evals/2026-09-shop-docker-multinode.md": [
           title: "Eval: two nodes, Docker sidecar (2026-09)"
         ],
-        "evals/2026-10-shop-blind.md": [title: "Eval: shop, blind, second run (2026-10)"]
+        "evals/2026-10-shop-blind.md": [title: "Eval: shop, blind, runs 2 and 3 (2026-10)"]
       ],
       groups_for_extras: [Guides: ~r/guides\//, Evals: ~r/evals\//],
       # The demo is compiled in dev (for --demo) but is not part of the package.

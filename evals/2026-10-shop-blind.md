@@ -1,4 +1,4 @@
-# Eval: blind diagnosis of the shop app, second run (2026-10-06)
+# Eval: blind diagnosis of the shop app, second and third runs (2026-10-06)
 
 The same eval as [the first blind run](2026-09-shop-blind.md), repeated
 after collection was rewritten: nodes are now observed by evaluating
@@ -86,3 +86,36 @@ with its columns, without collecting anything.
 - Single runs vary: the first run found everything, this one missed two
   things it never looked at. Repeat after the `sqlite_master` fix.
 - Listing the schema must work, since agents do check.
+
+## Third run, after the fix
+
+The same setup and prompt, in an empty folder this time, with the
+`sqlite_master` fix in the sidecar. Again only Porthole calls (11 queries,
+~1 min 12 s), no wrong claims, nothing changed on the node.
+
+**Found 8/9.** Everything the second run found, plus the ETS growth:
+`shop_search_index` with 1.3M rows, +50,000 rows (3.2 MB) every 5 s, owned
+by `Shop.Search.Indexer`. It again named no sender for the flooded mailbox
+(partial, as in every run), and missed the orphan.
+
+The fix made the difference directly: the agent's sixth query listed the
+tables,
+
+```sql
+SELECT name FROM sqlite_master WHERE type='table'
+```
+
+and its seventh was `SELECT * FROM ets_tables ORDER BY memory DESC LIMIT 10`
+(window 5 s), where it found the growing table. In the second run the same
+listing returned nothing, and the agent never looked at ETS.
+
+| Run | Found | Missed |
+|---|---|---|
+| [First](2026-09-shop-blind.md) (2026-09-28) | 9/9 | none (sender not named) |
+| Second (2026-10-06) | 7/9 | ETS growth, orphan (sender not named) |
+| Third (2026-10-06, after the fix) | 8/9 | orphan (sender not named) |
+
+The orphan, missed in three of four Porthole runs (including the
+[two-node run](2026-09-shop-docker-multinode.md)), is the one that needs a
+specific question: no process stands out by any counter.
+
