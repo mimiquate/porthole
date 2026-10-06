@@ -4,13 +4,14 @@ defmodule Mix.Tasks.Porthole.Doctor do
   @moduledoc """
   Checks every node Porthole would query and explains what to fix:
 
-      $ mix porthole.doctor --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" --all-nodes
+      $ mix porthole.doctor --connect my_app@10.0.1.12 --all-nodes
       ✓ my_app@10.0.1.12  OTP 27, Elixir 1.18.3, latency 1ms, collection 4ms
       ✗ my_app@10.0.1.13  OTP 26, Elixir 1.17.3, latency 1ms
           - OTP 26: Porthole needs OTP 27+
 
   Exits with status 1 if any node has an error. Takes the connection options
-  in `Porthole.CLI` (`--connect`, `--cookie`, `--node`, `--all-nodes`).
+  in `Porthole.CLI` (`--connect`, `--cookie` or `RELEASE_COOKIE`, `--node`,
+  `--all-nodes`).
   """
 
   use Mix.Task

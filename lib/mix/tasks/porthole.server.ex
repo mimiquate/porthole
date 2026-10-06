@@ -5,8 +5,11 @@ defmodule Mix.Tasks.Porthole.Server do
   Runs Porthole as a sidecar: this VM joins the cluster (holding the cookie)
   and serves MCP over HTTP. Agents get a URL and a token, never the cookie.
 
-      $ mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" \\
+      $ RELEASE_COOKIE=... mix porthole.server --connect my_app@10.0.1.12 \\
           --all-nodes --bind 0.0.0.0 --port 4040
+
+  The cookie is read from `RELEASE_COOKIE` (or `--cookie`, which leaves it
+  visible to other users of the machine).
 
   Tokens come from `config :porthole, :tokens` (see `mix porthole.gen.token`);
   the server refuses to start without one. Then point an agent at it, e.g.:

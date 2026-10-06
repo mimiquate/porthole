@@ -335,8 +335,9 @@ yet on a managed cluster).
 
 **Without the packaged sidecar**, any project that depends on `porthole`,
 `exqlite`, `plug` and `bandit` can run the same server with
-`mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE"
---all-nodes --bind 0.0.0.0`, or add `{Porthole.Server, ...}` to its
+`mix porthole.server --connect my_app@10.0.1.12 --all-nodes --bind 0.0.0.0`
+(with the cookie in `RELEASE_COOKIE`, so it stays off the command line), or
+add `{Porthole.Server, ...}` to its
 supervision tree. The server refuses to start without at least one token,
 listens on `127.0.0.1` unless told otherwise, and serves HTTPS with
 `--certfile`/`--keyfile`. Without those, terminate TLS in front of it

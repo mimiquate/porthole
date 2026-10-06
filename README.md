@@ -85,7 +85,7 @@ For agents, Porthole is an MCP server with one `query` tool.
   changed or redeployed:
 
   ```console
-  $ mix porthole.server --connect my_app@10.0.1.12 --cookie "$RELEASE_COOKIE" --all-nodes --bind 0.0.0.0
+  $ RELEASE_COOKIE=... mix porthole.server --connect my_app@10.0.1.12 --all-nodes --bind 0.0.0.0
   $ claude mcp add --transport http porthole https://porthole.internal:4040/ \
       --header "Authorization: Bearer ph_..."
   ```
@@ -176,6 +176,12 @@ aggregates and subqueries, and the running system stays the source of truth.
   `[:porthole, :query, *]` telemetry.
 - **Versions.** Elixir 1.18+ and OTP 27+ where queries run; observed nodes
   need Elixir and OTP 27+. Tested in CI.
+
+## Security
+
+Porthole's tool is read-only, but the sidecar holds your cluster's cookie:
+read [what it guarantees and what it does not](SECURITY.md), and report
+vulnerabilities privately as described there.
 
 ## Development
 

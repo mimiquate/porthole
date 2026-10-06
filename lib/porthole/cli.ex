@@ -5,6 +5,9 @@ defmodule Porthole.CLI do
     * `--connect NODE` / `--cookie COOKIE` - join a running node as a hidden
       node and query it, without starting this project's app. SQLite runs
       here; the target needs nothing from Porthole (Elixir on OTP 27+).
+      Without `--cookie`, the cookie is read from `RELEASE_COOKIE`, which
+      keeps it off the command line (where other users of the machine can
+      see it, e.g. with `ps`).
     * `--node NODE` (repeatable) / `--all-nodes` - nodes to query.
     * `--window MS` - sampling window.
     * `--all-supervisors` - find supervisors by scanning every process (see
@@ -63,13 +66,16 @@ defmodule Porthole.CLI do
     {:ok, _} =
       :net_kernel.start(:"porthole_#{System.pid()}", %{name_domain: domain, hidden: true})
 
+    # From the environment unless given: a command-line argument is visible
+    # to other users of the machine.
+    cookie = cookie || System.get_env("RELEASE_COOKIE")
     if cookie, do: Node.set_cookie(String.to_atom(cookie))
 
     Node.connect(target) ||
       Mix.raise("""
       could not connect to #{target}. Usual causes:
         - the node is not running, or its name is different (check with `epmd -names` on its host)
-        - the cookie differs (--cookie must match the node's cookie)
+        - the cookie differs (--cookie, or RELEASE_COOKIE, must match the node's cookie)
         - name types differ: a node started with --sname needs a short name here, --name a long one
         - epmd (port 4369) or the node's distribution port is not reachable from here
       """)
