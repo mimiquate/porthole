@@ -85,3 +85,4 @@ design.
 |---|---|---|---|
 | [Shop, blind](2026-09-shop-blind.md) | 2026-09-28 | 9/9 found, 11 queries, ~1 min, no changes to the node | 7/9 found, 1 wrong claim, ~2 min, copied a whole mailbox and table, ran app code, enabled tracing |
 | [Shop, two nodes, Docker sidecar](2026-09-shop-docker-multinode.md) | 2026-09-28 | 8/9 found (missed the orphan), 16 queries, ~1.5 min, both nodes covered without being told | not run |
+| [Shop, blind, second run](2026-10-shop-blind.md) | 2026-10-06 | 7/9 found (missed the ETS growth and the orphan, which it never looked at), 11 queries, ~1 min, no wrong claims; after collection was rewritten | not run |

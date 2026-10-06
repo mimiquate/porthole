@@ -94,10 +94,14 @@ defmodule Porthole.Query do
 
   defp run_admitted(sql, nodes, window, policy, all_supervisors) do
     tables = for table <- Table.all(), sql =~ ~r/\b#{table.name()}\b/i, do: table
+    # A query on the schema lists every table (agents check what they can
+    # query), but only the tables a query names are collected: the others
+    # are created empty.
+    listed = if sql =~ ~r/\bsqlite_(master|schema)\b/i, do: Table.all() -- tables, else: []
     {:ok, conn} = Sqlite3.open(":memory:")
 
     try do
-      {cuts, errors} = load(conn, tables, nodes, window, policy, all_supervisors)
+      {cuts, errors} = load(conn, tables, listed, nodes, window, policy, all_supervisors)
 
       with {:ok, columns, rows, more?} <- execute(conn, sql, window, policy) do
         {rows, shortened} = shorten_cells(rows)
@@ -105,6 +109,13 @@ defmodule Porthole.Query do
         notes =
           List.flatten([
             if(more?, do: "only the first #{policy.max_result_rows} rows are returned", else: []),
+            if(listed != [],
+              do:
+                "the schema lists every table, but only the tables a query names are " <>
+                  "collected: #{Enum.map_join(listed, ", ", & &1.name())} are empty here " <>
+                  "(name a table in a query to collect it)",
+              else: []
+            ),
             if(shortened > 0,
               do: "#{shortened} cells were cut to #{@max_cell_bytes} bytes",
               else: []
@@ -142,9 +153,15 @@ defmodule Porthole.Query do
   # answers, so the rows of only one node are held at a time. Every node and
   # table gets an equal share of the policy's max_bytes; rows beyond a share
   # are not loaded. Returns the cuts and the nodes that failed.
-  defp load(conn, tables, nodes, window, policy, all_supervisors) do
+  defp load(conn, tables, listed, nodes, window, policy, all_supervisors) do
     :ok = Sqlite3.execute(conn, "BEGIN")
     inserts = Map.new(tables, &{&1, create_table(conn, &1, window != nil)})
+
+    for table <- listed do
+      {statement, _columns} = create_table(conn, table, window != nil)
+      Sqlite3.release(conn, statement)
+    end
+
     share = div(policy.max_bytes, max(length(nodes) * length(tables), 1))
     limits = %{max_rows: policy.max_rows, all_supervisors: all_supervisors}
 

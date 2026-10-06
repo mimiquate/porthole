@@ -10,13 +10,15 @@ many narrow tools. It is a sibling of Airlock: Airlock controls what agents can
 
 > **Status:** spike. Only the `observe` capability tier is implemented.
 
-**Does it help?** In a first [blind eval](evals/2026-09-shop-blind.md)
-(one run each, so indicative rather than conclusive) on an app with nine
-planted problems, an agent with Porthole found 9/9 in about a minute without
-touching the node. The same agent with only a shell found 7/9
-in about two minutes, made one wrong claim, and along the way copied a whole
-mailbox and a whole ETS table, ran application code and enabled tracing on a
-live process.
+**Does it help?** In a [blind eval](evals/2026-09-shop-blind.md) on an
+app with nine planted problems, an agent with Porthole found 9/9 in about a
+minute without touching the node. The same agent with only a shell found
+7/9 in about two minutes, made one wrong claim, and along the way copied a
+whole mailbox and a whole ETS table, ran application code and enabled
+tracing on a live process. A [second Porthole run](evals/2026-10-shop-blind.md)
+found 7/9: it never looked at the two it missed, but made no wrong claims
+and changed nothing. These are single runs, so indicative rather than
+conclusive.
 
 ## Try it on your production app
 

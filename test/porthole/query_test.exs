@@ -20,6 +20,20 @@ defmodule Porthole.QueryTest do
              [[0]]
   end
 
+  test "the schema lists every table, without collecting the ones not named" do
+    result = Porthole.query!("SELECT name, sql FROM sqlite_master ORDER BY name")
+    names = Enum.map(result.rows, &hd/1)
+
+    assert names == Enum.sort(Enum.map(Porthole.Table.all(), & &1.name()))
+    assert Enum.find(result.rows, &(hd(&1) == "ets_tables")) |> List.last() =~ "owner"
+    assert [note] = result.notes
+    assert note =~ "only the tables a query names are collected"
+
+    # Named tables are still collected.
+    assert [[n]] = Porthole.query!("SELECT count(*) FROM processes, sqlite_master LIMIT 1").rows
+    assert n > 0
+  end
+
   test "writes are denied by SQLite itself" do
     for sql <- [
           "DELETE FROM processes",
