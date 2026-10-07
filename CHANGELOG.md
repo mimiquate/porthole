@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - Unreleased
+## 0.1.0 - 2026-10-07
 
 The first release. Porthole lets coding agents inspect a live Erlang/Elixir
 system with read-only SQL, without installing anything in the app.
