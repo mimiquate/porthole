@@ -40,7 +40,9 @@ defmodule Porthole.Audit do
       at: DateTime.utc_now() |> DateTime.to_iso8601(),
       client: context.client,
       remote_ip: context[:remote_ip],
-      sql: sql,
+      # Bounded: a client controls the SQL's size, and one huge query per
+      # request must not flood the log.
+      sql: Porthole.Term.truncate(sql, 4_096),
       # The nodes a query actually ran on when known, otherwise what was asked.
       nodes: nodes(outcome, opts[:nodes]),
       window_ms: opts[:window_ms],

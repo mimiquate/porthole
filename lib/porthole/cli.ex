@@ -31,6 +31,19 @@ defmodule Porthole.CLI do
   # options (including any task-specific `extra` switches).
   @spec setup!([String.t()], keyword()) :: {keyword(), [String.t()], keyword()}
   def setup!(args, extra \\ []) do
+    # These commands run queries, which need SQLite (and the server, Plug and
+    # Bandit): they run in a project that depends on Porthole. Installed as
+    # an archive, Porthole carries no dependencies, only the trial commands.
+    if Mix.Project.get() == nil do
+      Mix.raise("""
+      this command runs queries, so it needs a project that depends on Porthole and
+      exqlite (e.g. your app, with {:porthole, ...} and {:exqlite, ...} as dev
+      dependencies). Installed as an archive, Porthole provides the commands that
+      need no project: mix porthole.fly.up / fly.down, porthole.k8s.up / k8s.down
+      and porthole.gen.token.
+      """)
+    end
+
     {opts, rest} = OptionParser.parse!(args, strict: @switches ++ extra)
 
     target =

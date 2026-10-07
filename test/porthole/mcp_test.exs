@@ -18,6 +18,12 @@ defmodule Porthole.MCPTest do
     assert %{result: %{protocolVersion: "2025-06-18", serverInfo: %{name: "porthole"}}} =
              call("initialize", %{"protocolVersion" => "2025-06-18"})
 
+    # A version the server does not implement gets its latest, not an echo.
+    assert %{result: %{protocolVersion: "2025-11-25"}} =
+             call("initialize", %{"protocolVersion" => "1999-01-01"})
+
+    assert %{result: %{protocolVersion: "2025-11-25"}} = call("initialize", %{})
+
     assert %{result: %{tools: [%{name: "query", description: description}]}} = call("tools/list")
     assert description =~ "reductions_delta"
   end

@@ -65,6 +65,25 @@ defmodule Porthole.QueryTest do
     end
   end
 
+  test "invalid SQL and writes fail before anything is collected" do
+    # Traces calls to the function that walks the processes, made by this
+    # test's processes and the ones they spawn (the query and its workers),
+    # so other tests' queries do not count.
+    :erlang.trace(self(), true, [:call, :set_on_spawn])
+    :erlang.trace_pattern({Porthole.Gather, :processes, 2}, true, [:local])
+
+    on_exit(fn -> :erlang.trace_pattern({Porthole.Gather, :processes, 2}, false, [:local]) end)
+
+    assert {:error, %Error{reason: :sql_error}} = Porthole.query("SELECT nope FROM processes")
+    assert {:error, %Error{reason: :read_only}} = Porthole.query("DELETE FROM processes")
+    # Trace messages arrive asynchronously: give them time either way.
+    refute_receive {:trace, _, :call, {Porthole.Gather, :processes, _}}, 200
+
+    assert %{rows: [[_]]} = Porthole.query!("SELECT count(*) FROM processes")
+    assert_receive {:trace, _, :call, {Porthole.Gather, :processes, _}}, 1_000
+    :erlang.trace(self(), false, [:call, :set_on_spawn])
+  end
+
   test "writes are denied by SQLite itself" do
     for sql <- [
           "DELETE FROM processes",

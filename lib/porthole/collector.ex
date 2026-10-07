@@ -200,7 +200,12 @@ defmodule Porthole.Collector do
   defp describe(:no_elixir, _),
     do: "this node does not run Elixir (Porthole observes Elixir applications)"
 
-  defp describe({:error, {:erpc, :noconnection}}, _), do: "node is not reachable"
+  # Erlang gives no reason for a failed connection; these are the usual ones.
+  defp describe({:error, {:erpc, :noconnection}}, _),
+    do:
+      "node is not reachable: it may be down, the network may block it (epmd on 4369, or " <>
+        "its distribution port), or its cookie differs from this node's"
+
   defp describe({:error, {:erpc, :timeout}}, _), do: "collection timed out"
 
   defp describe(other, _), do: "collection failed: " <> Porthole.Term.render(other)

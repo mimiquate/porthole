@@ -96,6 +96,30 @@ when a real question needs it.
   Memory grows with `max_concurrent` × (`max_bytes` loaded + one node's rows + other nodes'
   encoded results waiting): for many large nodes, lower `max_concurrent` or `max_bytes`.
   Not done (≈15 MiB per query): shaping rows lazily instead of as a list per table.
+- **Robustness pass before going public** (2026-10-07), all local:
+  - Soak: 3,000 mixed queries (every table, joins, windows, the schema, and deliberate
+    errors) through the HTTP sidecar release against a 20k-process node, 4 at a time:
+    every outcome as expected, no HTTP errors, nothing logged; afterwards the sidecar was
+    back to its baseline (memory, processes, ports; atoms +58 once, from decoding the
+    target's data) and the target node was exactly unchanged.
+  - Failures mid-query (with a *hidden* querying node, as the sidecar is: a visible one
+    makes `global` disconnect others "to prevent overlapping partitions"): a node dying,
+    a node too busy for the deadline (worker gone after), a dropped connection (the next
+    query reconnects), a node replaced during a window, another cookie. Each: the others
+    answer, a clear per-node error, nothing left running.
+  - 20 nodes × 10k processes: count 4.2 s, 5 s window 15 s, 4 concurrent 20 s, peak
+    324 MiB on the querying node; the 50 MB budget still loaded every node in full.
+  - 28 hostile/malformed inputs through the MCP handler: no crash after the fixes.
+  - The MCP Inspector (official client, SDK protocol 2025-11-25) lists the tool and calls it.
+  - Found and fixed: a token's default policy capped every limit at its default, so the
+    environment policy could never raise one (`Policy.new/1` now constrains only what it
+    sets); empty SQL crashed the query; the audit log wrote the whole SQL (now 4 KB); invalid
+    SQL and writes collected every table first (now checked against the empty schema
+    first: 2.4 s → 3 ms, and nodes are never touched); `initialize` echoed any protocol
+    version (now negotiates); outside a project, query/mcp/doctor/server failed with Mix's
+    "Could not find a Mix.Project" (now says what the archive provides).
+  - Known and accepted: only the first of several SQL statements runs (the tool says "one
+    SELECT"); `up`/`down` need a Unix shell (Windows: WSL).
 - **Compiled fast path: parked on branch `compiled-fast-path`** (2026-10-06, not merged by
   decision). Nodes whose `Porthole.Gather` source fingerprint matches the sidecar's run it
   compiled instead of evaluated: 5–7× less work on idle nodes, but little gain when the node

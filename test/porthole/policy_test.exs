@@ -37,4 +37,20 @@ defmodule Porthole.PolicyTest do
     assert {:error, %Error{reason: :not_allowed}} =
              Policy.authorize_nodes(Policy.new(nodes: [:a@h]), [:a@h, :b@h])
   end
+
+  test "the environment policy can raise limits; tokens and requests only narrow them" do
+    Application.put_env(:porthole, :policy, queries_per_minute: 1_000, max_rows: 200_000)
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    env = Policy.environment()
+    # A token with no policy of its own leaves the raised limits alone.
+    assert %{queries_per_minute: 1_000, max_rows: 200_000} = Policy.intersect(env, Policy.new())
+
+    # A token, or a request, narrows only what it sets.
+    narrowed = Policy.intersect(env, Policy.new(max_rows: 10))
+    assert %{max_rows: 10, queries_per_minute: 1_000} = narrowed
+
+    # And never widens.
+    assert %{max_rows: 200_000} = Policy.intersect(env, Policy.new(max_rows: 999_999_999))
+  end
 end

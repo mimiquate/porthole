@@ -77,10 +77,18 @@ defmodule Porthole.MCP do
   def error(id, code, message),
     do: %{jsonrpc: "2.0", id: id, error: %{code: code, message: message}}
 
+  # Protocol versions this server implements: it uses only tools, ping and
+  # notifications, which are the same in all of them. A client asking for
+  # another version gets the latest; per the spec, it may then disconnect.
+  @protocol_versions ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"]
+
   defp request("initialize", params, _context) do
+    requested = is_map(params) && params["protocolVersion"]
+    version = if requested in @protocol_versions, do: requested, else: hd(@protocol_versions)
+
     {:ok,
      %{
-       protocolVersion: params["protocolVersion"] || "2025-06-18",
+       protocolVersion: version,
        capabilities: %{tools: %{}},
        serverInfo: %{name: "porthole", version: to_string(Application.spec(:porthole, :vsn))}
      }}

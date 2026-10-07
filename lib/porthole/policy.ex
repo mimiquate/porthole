@@ -38,17 +38,21 @@ defmodule Porthole.Policy do
     identified clients, such as agents connected through MCP).
   * `:max_concurrent` - queries that may run at the same time on the
     querying node, across all clients.
+
+  Limits are `:infinity` in a policy that does not set them (see `new/1`);
+  every query intersects with the environment policy, which sets them all.
   """
+  @type limit :: pos_integer() | :infinity
   @type t :: %__MODULE__{
           tiers: [tier()],
           nodes: :all | [node()],
-          max_rows: pos_integer(),
-          max_bytes: pos_integer(),
-          max_result_rows: pos_integer(),
-          max_window_ms: pos_integer(),
-          timeout_ms: pos_integer(),
-          queries_per_minute: pos_integer(),
-          max_concurrent: pos_integer()
+          max_rows: limit(),
+          max_bytes: limit(),
+          max_result_rows: limit(),
+          max_window_ms: limit(),
+          timeout_ms: limit(),
+          queries_per_minute: limit(),
+          max_concurrent: limit()
         }
 
   defstruct tiers: [:observe],
@@ -75,11 +79,22 @@ defmodule Porthole.Policy do
   @spec tiers() :: [tier()]
   def tiers, do: @tiers
 
-  @doc "Builds a policy. With no `:tiers`, the policy allows every tier."
+  @doc """
+  Builds a policy that constrains only what `opts` sets: every tier, every
+  node and no limit otherwise. Used for the session (a token's policy) and
+  request layers, which can only narrow the environment policy: a limit they
+  leave unset is the environment's, whatever it is configured to.
+  """
   @spec new(keyword()) :: t()
-  def new(opts \\ []), do: struct!(%__MODULE__{tiers: @tiers}, opts)
+  def new(opts \\ []) do
+    unlimited = for key <- @limits, do: {key, :infinity}
+    struct!(%__MODULE__{tiers: @tiers}, unlimited ++ opts)
+  end
 
-  @doc "The environment policy, from `config :porthole, :policy`."
+  @doc """
+  The environment policy, from `config :porthole, :policy`: the defaults
+  below, overridden by the configuration, raised or lowered.
+  """
   @spec environment() :: t()
   def environment, do: struct!(__MODULE__, Application.get_env(:porthole, :policy, []))
 

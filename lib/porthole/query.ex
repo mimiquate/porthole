@@ -102,6 +102,41 @@ defmodule Porthole.Query do
     # query), but only the tables a query names are collected: the others
     # are created empty.
     listed = if sql =~ ~r/\bsqlite_(master|schema)\b/i, do: Table.all() -- tables, else: []
+
+    # Invalid SQL and writes fail before any node is touched.
+    with :ok <- validate(sql, tables ++ listed, window) do
+      load_and_run(sql, tables, listed, nodes, window, policy, all_supervisors)
+    end
+  end
+
+  # Prepares the SQL against the tables' (empty) definitions, with the same
+  # authorizer as the real query: agents retry after typos, and each attempt
+  # would otherwise collect every table it names from the nodes first.
+  defp validate(sql, tables, window) do
+    {:ok, conn} = Sqlite3.open(":memory:")
+
+    try do
+      for table <- tables do
+        {statement, _columns} = create_table(conn, table, window != nil)
+        Sqlite3.release(conn, statement)
+      end
+
+      :ok = Sqlite3.set_authorizer(conn, @deny)
+
+      case Sqlite3.prepare(conn, sql) do
+        {:ok, statement} ->
+          Sqlite3.release(conn, statement)
+          :ok
+
+        {:error, message} ->
+          {:error, sql_error(message, window)}
+      end
+    after
+      Sqlite3.close(conn)
+    end
+  end
+
+  defp load_and_run(sql, tables, listed, nodes, window, policy, all_supervisors) do
     {:ok, conn} = Sqlite3.open(":memory:")
     :ok = Sqlite3.execute(conn, "PRAGMA hard_heap_limit = #{sqlite_heap_limit()}")
 
@@ -325,11 +360,20 @@ defmodule Porthole.Query do
   defp fetch(conn, statement, policy) do
     # Cancel the query if it runs past its budget (e.g. an accidental
     # cartesian product or an unbounded recursive CTE).
-    {:ok, timer} = :timer.apply_after(policy.timeout_ms, Sqlite3, :cancel, [conn])
-    {:ok, columns} = Sqlite3.columns(conn, statement)
-    fetched = fetch_rows(conn, statement, policy.max_result_rows + 1, [])
-    :timer.cancel(timer)
+    case Sqlite3.columns(conn, statement) do
+      {:ok, columns} ->
+        {:ok, timer} = :timer.apply_after(policy.timeout_ms, Sqlite3, :cancel, [conn])
+        fetched = fetch_rows(conn, statement, policy.max_result_rows + 1, [])
+        :timer.cancel(timer)
+        fetched(fetched, columns, policy)
 
+      # Empty SQL, or only a comment, prepares to no statement at all.
+      {:error, _} ->
+        {:error, Error.new(:bad_request, "the SQL holds no statement: send one SELECT")}
+    end
+  end
+
+  defp fetched(fetched, columns, policy) do
     case fetched do
       {:ok, rows} ->
         {rows, rest} = Enum.split(rows, policy.max_result_rows)
