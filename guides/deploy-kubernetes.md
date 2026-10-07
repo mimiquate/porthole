@@ -48,7 +48,8 @@ $ mix porthole.k8s.up my-app --namespace prod
 
 Your app needs nothing from Porthole: the archive only adds the `mix
 porthole.*` commands to your machine, and `mix archive.uninstall porthole`
-removes them.
+removes them. Archives are installed per Elixir version: with asdf or mise,
+install it under the Elixir version active where you run `up`.
 
 `my-app` is your app's Deployment. Next to it, in the same namespace, it
 creates a sidecar called `my-app-porthole`:

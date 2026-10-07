@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `fly.up` / `k8s.up` reopen the temporary tunnel they check the sidecar
+  through if it exits (a dropped connection ends `fly proxy` and
+  `kubectl port-forward`), instead of failing with "could not reach the
+  sidecar" while the sidecar is fine.
+- Docs: the archive is installed per Elixir version (asdf and mise keep one
+  Mix home per version).
+
 ## 0.1.0 - 2026-10-07
 
 The first release. Porthole lets coding agents inspect a live Erlang/Elixir

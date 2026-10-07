@@ -100,29 +100,66 @@ defmodule Porthole.Trial do
   @doc """
   Starts a tunnel (`executable` with the arguments `args.(local_port)`), runs
   `fun` with the local port, and closes the tunnel afterwards.
+
+  A tunnel that exits while `fun` runs (`fly proxy` and `kubectl
+  port-forward` exit when the connection drops) is reopened, up to
+  `restarts` times.
   """
-  @spec with_tunnel(String.t(), (pos_integer() -> [String.t()]), (pos_integer() -> result)) ::
-          result
+  @spec with_tunnel(
+          String.t(),
+          (pos_integer() -> [String.t()]),
+          (pos_integer() -> result),
+          non_neg_integer()
+        ) :: result
         when result: term()
-  def with_tunnel(executable, args, fun) do
+  def with_tunnel(executable, args, fun, restarts \\ 5) do
     {:ok, socket} = :gen_tcp.listen(0, [])
     {:ok, port} = :inet.port(socket)
     :gen_tcp.close(socket)
 
+    keeper = spawn_link(fn -> keep_open(executable, args.(port), restarts) end)
+
+    try do
+      fun.(port)
+    after
+      ref = Process.monitor(keeper)
+      send(keeper, :close)
+
+      receive do
+        {:DOWN, ^ref, _, _, _} -> :ok
+      end
+    end
+  end
+
+  defp keep_open(executable, args, restarts) do
     tunnel =
       Port.open({:spawn_executable, executable}, [
         :binary,
         :exit_status,
         :stderr_to_stdout,
-        args: args.(port)
+        args: args
       ])
 
     {:os_pid, os_pid} = Port.info(tunnel, :os_pid)
+    await_tunnel(tunnel, os_pid, executable, args, restarts)
+  end
 
-    try do
-      fun.(port)
-    after
-      System.cmd("kill", [to_string(os_pid)], stderr_to_stdout: true)
+  defp await_tunnel(tunnel, os_pid, executable, args, restarts) do
+    receive do
+      :close ->
+        System.cmd("kill", [to_string(os_pid)], stderr_to_stdout: true)
+
+      {^tunnel, {:data, _}} ->
+        await_tunnel(tunnel, os_pid, executable, args, restarts)
+
+      {^tunnel, {:exit_status, _}} when restarts > 0 ->
+        Process.sleep(1_000)
+        keep_open(executable, args, restarts - 1)
+
+      {^tunnel, {:exit_status, _}} ->
+        receive do
+          :close -> :ok
+        end
     end
   end
 

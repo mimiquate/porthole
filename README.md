@@ -43,6 +43,8 @@ The archive provides the commands that need no project (`fly.up`/`down`,
 `k8s.up`/`down`, `gen.token`); the ones that run queries locally
 (`query`, `mcp`, `doctor`, `server`) run inside a project that depends on
 Porthole. `up` and `down` use a Unix shell: on Windows, run them under WSL.
+Archives are installed per Elixir version (asdf and mise keep one Mix home
+per version), so install it with the Elixir version you run it with.
 
 To install nothing at all, run the same commands through `Mix.install`:
 

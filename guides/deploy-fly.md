@@ -28,7 +28,8 @@ $ mix porthole.fly.up my-app
 
 Your app needs nothing from Porthole: the archive only adds the `mix
 porthole.*` commands to your machine, and `mix archive.uninstall porthole`
-removes them.
+removes them. Archives are installed per Elixir version: with asdf or mise,
+install it under the Elixir version active where you run `up`.
 
 It creates a separate Fly app, `my-app-porthole`, in your app's organization
 and region, then:
