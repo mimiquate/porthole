@@ -53,8 +53,11 @@ defmodule Porthole.MixProject do
       licenses: ["Apache-2.0"],
       # sidecar/fly.toml is embedded by Porthole.Fly, so `mix porthole.fly.up`
       # works from an installed package.
-      files: ~w(lib mix.exs README.md LICENSE .formatter.exs sidecar/fly.toml),
-      links: %{"GitHub" => @source_url}
+      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE .formatter.exs sidecar/fly.toml),
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"
+      }
     ]
   end
 
@@ -70,6 +73,7 @@ defmodule Porthole.MixProject do
         "guides/deploy-fly.md",
         "guides/deploy-kubernetes.md",
         "SECURITY.md": [title: "Security"],
+        "CHANGELOG.md": [title: "Changelog"],
         "evals/README.md": [title: "Evals", filename: "evals"],
         "evals/2026-09-shop-blind.md": [title: "Eval: shop, blind (2026-09)"],
         "evals/2026-09-shop-docker-multinode.md": [

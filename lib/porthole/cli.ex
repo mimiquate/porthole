@@ -12,7 +12,8 @@ defmodule Porthole.CLI do
     * `--window MS` - sampling window.
     * `--all-supervisors` - find supervisors by scanning every process (see
       `Porthole.Query.run/2`).
-    * `--demo` - start the demo app (a small shop with planted problems) first
+    * `--demo` - start the demo app (a small shop with planted problems) first;
+      from a checkout of Porthole, since the demo is not in the package
       (dev only, without `--connect`).
   """
 
@@ -98,7 +99,13 @@ defmodule Porthole.CLI do
 
   defp start_demo do
     demo = Module.concat(Porthole, Demo)
-    Code.ensure_loaded?(demo) || Mix.raise("--demo only works in dev and test")
+
+    Code.ensure_loaded?(demo) ||
+      Mix.raise(
+        "--demo needs the demo app, which is in Porthole's repository, not in the package: " <>
+          "run it from a checkout of Porthole (in dev or test)"
+      )
+
     :ok = demo.start()
     Process.sleep(500)
   end

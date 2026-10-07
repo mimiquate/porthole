@@ -53,7 +53,7 @@ $ elixir -e 'Mix.install([{:porthole, github: "mimiquate/porthole"}]); Mix.Task.
 ## Other ways to use it
 
 ```console
-# Try it on a tree of deliberately misbehaving processes (dev only)
+# From a checkout of Porthole: try it on a small app with planted problems
 $ mix porthole.query --demo \
     "SELECT initial_call, sum(message_queue_len) AS queued FROM processes GROUP BY 1 ORDER BY 2 DESC LIMIT 3"
 
