@@ -28,7 +28,7 @@ cookie. Your app is not changed or redeployed; any Elixir app on OTP 27+
 whose nodes are clustered with long names works.
 
 ```console
-$ mix archive.install github mimiquate/porthole   # once; remove it with: mix archive.uninstall porthole
+$ mix archive.install hex porthole   # once; remove it with: mix archive.uninstall porthole
 $ mix porthole.fly.up my-app                     # on Fly.io
 $ mix porthole.k8s.up my-app --namespace prod    # or on Kubernetes (my-app is the Deployment)
 ```
@@ -47,7 +47,7 @@ Porthole. `up` and `down` use a Unix shell: on Windows, run them under WSL.
 To install nothing at all, run the same commands through `Mix.install`:
 
 ```console
-$ elixir -e 'Mix.install([{:porthole, github: "mimiquate/porthole"}]); Mix.Task.run("porthole.fly.up", ["my-app"])'
+$ elixir -e 'Mix.install([:porthole]); Mix.Task.run("porthole.fly.up", ["my-app"])'
 ```
 
 ## Other ways to use it

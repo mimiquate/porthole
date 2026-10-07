@@ -22,7 +22,7 @@ dependency and is not redeployed.
 With `fly` logged in to your app's organization:
 
 ```console
-$ mix archive.install github mimiquate/porthole   # once
+$ mix archive.install hex porthole   # once
 $ mix porthole.fly.up my-app
 ```
 

@@ -42,7 +42,7 @@ The cookie can come from a Secret (`RELEASE_COOKIE` from `secretKeyRef` or
 With `kubectl` pointing at the cluster:
 
 ```console
-$ mix archive.install github mimiquate/porthole   # once
+$ mix archive.install hex porthole   # once
 $ mix porthole.k8s.up my-app --namespace prod
 ```
 
