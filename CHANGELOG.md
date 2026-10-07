@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.1.1 - 2026-10-07
 
 - `fly.up` / `k8s.up` reopen the temporary tunnel they check the sidecar
   through if it exits (a dropped connection ends `fly proxy` and
