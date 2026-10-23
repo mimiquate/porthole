@@ -549,12 +549,19 @@ defmodule Porthole.Gather do
 
       receive do
         event when elem(event, 0) == :trace_ts ->
-          rows = if (row = keep.(event)) == nil, do: rows, else: [row | rows]
+          # `case`, not `if`: evaluated, `if` costs an extra guard per event.
+          rows =
+            case keep.(event) do
+              nil -> rows
+              row -> [row | rows]
+            end
+
           {:message_queue_len, queued} = :erlang.process_info(me, :message_queue_len)
 
-          if count + 1 + queued >= max_events,
-            do: {:events, rows, count + 1},
-            else: read.(read, keep, rows, count + 1)
+          case count + 1 + queued >= max_events do
+            true -> {:events, rows, count + 1}
+            false -> read.(read, keep, rows, count + 1)
+          end
 
         :porthole_watchdog ->
           {:events, rows, count}
@@ -576,12 +583,17 @@ defmodule Porthole.Gather do
       drain, keep, until, rows, count ->
         receive do
           event when elem(event, 0) == :trace_ts ->
-            rows = if (row = keep.(event)) == nil, do: rows, else: [row | rows]
+            rows =
+              case keep.(event) do
+                nil -> rows
+                row -> [row | rows]
+              end
 
             # The clock is read every 100 events.
-            if rem(count, 100) == 0 and :erlang.monotonic_time(:millisecond) > until,
-              do: {rows, count + 1, :deadline},
-              else: drain.(drain, keep, until, rows, count + 1)
+            case rem(count, 100) == 0 and :erlang.monotonic_time(:millisecond) > until do
+              true -> {rows, count + 1, :deadline}
+              false -> drain.(drain, keep, until, rows, count + 1)
+            end
         after
           0 -> {rows, count, :all}
         end
