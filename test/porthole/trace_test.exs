@@ -205,6 +205,28 @@ defmodule Porthole.TraceTest do
       assert result.rows == [["trace_test_owner"]]
     end
 
+    test "a task whose caller has exited is said to be started by its supervisor" do
+      start_supervised!({Task.Supervisor, name: :trace_test_tasks})
+      test = self()
+
+      # The caller starts a task under the supervisor, then exits: the task's
+      # $callers names a process that is gone.
+      spawn(fn ->
+        task = Task.Supervisor.async_nolink(:trace_test_tasks, fn -> Process.sleep(200) end)
+        send(test, {:started, task.pid})
+      end)
+
+      assert_receive {:started, _task_pid}
+
+      {:ok, result} =
+        query("SELECT DISTINCT started_by FROM trace_exits",
+          trace: %{exits: "trace_test_tasks"},
+          window_ms: 400
+        )
+
+      assert result.rows == [["trace_test_tasks"]]
+    end
+
     test "stops at the event limit, and says so" do
       start_supervised!({Inbox, :trace_test_flood})
       for _ <- 1..4, do: sender(:trace_test_flood, :tick, 0)
@@ -295,7 +317,7 @@ defmodule Porthole.TraceTest do
         id: :trace_test_sup,
         start:
           {Supervisor, :start_link,
-           [children, [strategy: :one_for_one, max_restarts: 1_000, name: :trace_test_sup]]},
+           [children, [strategy: :one_for_one, max_restarts: 1_000_000, name: :trace_test_sup]]},
         type: :supervisor
       })
 
@@ -306,7 +328,7 @@ defmodule Porthole.TraceTest do
         )
 
       # Each crashed child had exited (it lived 20 ms), but it is identified.
-      assert who.rows == [["Porthole.TraceTest.Worker.init/1"]]
+      assert who.rows == [["Porthole.TraceTest.Worker.init/1"]], inspect(who)
 
       {:ok, result} =
         query(
@@ -315,7 +337,13 @@ defmodule Porthole.TraceTest do
           window_ms: 500
         )
 
-      assert [["FunctionClauseError", "Porthole.TraceTest.Worker.parse/1", count]] = result.rows
+      assert match?(
+               [["FunctionClauseError", "Porthole.TraceTest.Worker.parse/1", _]],
+               result.rows
+             ),
+             inspect(result)
+
+      [[_reason, _location, count]] = result.rows
       # Restarted children are traced too.
       assert count > 3
       refute inspect(result) =~ "unexpected"

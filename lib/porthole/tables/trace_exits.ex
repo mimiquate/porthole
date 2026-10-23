@@ -55,7 +55,10 @@ defmodule Porthole.Tables.TraceExits do
          "spawns may show :erlang.apply/2: see started_by."},
       {:started_by, :text,
        "Who started it: the process a task works for (e.g. the LiveView behind a preload " <>
-         "task), or else the process that spawned it; a name or an initial call."},
+         "task), or else the process that spawned it; a name or an initial call. For a " <>
+         "LiveView, its transport: the websocket connection's handler (Bandit, Cowboy), or " <>
+         "Phoenix.Transports.LongPoll.Server when it fell back to long polling. (A first, " <>
+         "server-rendered page load runs inside the HTTP handler: no LiveView process.)"},
       {:reason, :text,
        "Class of the exit reason: normal, shutdown, killed, an exception (FunctionClauseError, " <>
          "MatchError) or another error atom (timeout, noproc). Never the reason's data."},

@@ -465,12 +465,25 @@ defmodule Porthole.Gather do
 
     # Who started it: the process it works for ($callers, set by Elixir
     # tasks: e.g. the LiveView behind a preload task), or else its parent
-    # ($ancestors, set by proc_lib).
-    started_by = fn
-      [caller | _], _ancestors when is_pid(caller) and node(caller) == node() -> who.(caller)
-      _callers, [parent | _] when is_pid(parent) and node(parent) == node() -> who.(parent)
-      _callers, [name | _] when is_atom(name) -> {name, nil}
-      _callers, _ancestors -> nil
+    # ($ancestors, set by proc_lib); one that has exited is skipped.
+    started_by = fn callers, ancestors ->
+      heads = for list <- [callers, ancestors], is_list(list), list != [], do: hd(list)
+
+      found =
+        for candidate <- heads,
+            id =
+              (case candidate do
+                 pid when is_pid(pid) and node(pid) == node() -> who.(pid)
+                 name when is_atom(name) -> {name, nil}
+                 _other -> nil
+               end),
+            id != nil,
+            do: id
+
+      case found do
+        [id | _] -> id
+        [] -> nil
+      end
     end
 
     # {registered name, initial call, who started it}.

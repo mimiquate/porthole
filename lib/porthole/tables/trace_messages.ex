@@ -39,8 +39,10 @@ defmodule Porthole.Tables.TraceMessages do
          "and plain spawns show :erlang.apply/2: see sender_started_by."},
       {:sender_started_by, :text,
        "Who started it: the process a task works for (e.g. the LiveView behind a preload " <>
-         "task), or else its parent; a name or an initial call. NULL, like the other " <>
-         "sender_ columns, for a sender that exited right after sending."},
+         "task), or else its parent; a name or an initial call. For a LiveView, its " <>
+         "transport: the websocket connection's handler (Bandit, Cowboy), or " <>
+         "Phoenix.Transports.LongPoll.Server when it fell back to long polling. NULL, like " <>
+         "the other sender_ columns, for a sender that exited right after sending."},
       {:receiver, :text, "Pid of the traced process."},
       {:tag, :text,
        "Kind of message: its first element (order_event), a struct's name, or call:<tag> / " <>
