@@ -127,6 +127,15 @@ defmodule Porthole.Query do
          "a trace runs during the window: pass window_ms too (e.g. 5000)"
        )}
 
+  defp check_trace(_trace, window, policy) when window > policy.max_trace_window_ms,
+    do:
+      {:error,
+       Error.new(
+         :bad_request,
+         "a trace's window_ms must be at most #{policy.max_trace_window_ms} (a trace costs " <>
+           "for as long as it runs; a few seconds usually answers), got #{window}"
+       )}
+
   defp check_trace(_trace, _window, policy), do: Policy.authorize(policy, :trace)
 
   # A pid is <0.X.Y> on every node: it names a process on one node only.
@@ -229,11 +238,15 @@ defmodule Porthole.Query do
             for({name, node, cut} <- Enum.reverse(cuts), do: cut_note(name, node, cut, policy))
           ])
 
+        # Notes that only inform (a trace found nothing to trace on a node)
+        # do not make the result truncated.
+        informative = Enum.count(cuts, &match?({_name, _node, {:note, :info, _}}, &1))
+
         {:ok,
          %Result{
            columns: columns,
            rows: rows,
-           truncated: notes != [],
+           truncated: length(notes) > informative,
            notes: notes,
            errors: for({node, message} <- errors, do: %{node: to_string(node), message: message}),
            nodes: Enum.map(nodes, &to_string/1),
@@ -267,7 +280,7 @@ defmodule Porthole.Query do
       "#{name} on #{node}: collection stopped at #{policy.max_rows} rows (max_rows), " <>
         "#{loaded} loaded; aggregates are incomplete"
 
-  defp cut_note(name, node, {:note, note}, _policy), do: "#{name} on #{node}: #{note}"
+  defp cut_note(name, node, {:note, _kind, note}, _policy), do: "#{name} on #{node}: #{note}"
 
   defp cut_note(name, node, {:bytes, loaded}, policy),
     do:
@@ -311,8 +324,8 @@ defmodule Porthole.Query do
             notes =
               case truncated do
                 {:trace, report} ->
-                  for note <- Trace.notes(report, trace, window, policy.max_rows),
-                      do: {table.name(), node, {:note, note}}
+                  for {kind, note} <- Trace.notes(report, trace, window, policy.max_rows),
+                      do: {table.name(), node, {:note, kind, note}}
 
                 _other ->
                   []

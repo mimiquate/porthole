@@ -42,7 +42,12 @@ defmodule Porthole.Policy do
   * `:max_concurrent` - queries that may run at the same time on the
     querying node, across all clients.
   * `:max_trace_events` - events a trace may produce on each node before it
-    is stopped (counted as the VM produces them).
+    is stopped (counted as the VM produces them). Events wait in the tracing
+    process until read, under a memory cap: raised far above the default (to
+    ~100k and more), a flood can fill that cap and the trace returns nothing.
+  * `:max_trace_window_ms` - longest window for a trace. Lower than
+    `:max_window_ms`: a sampling window costs nothing while it waits, a trace
+    costs for as long as it runs.
 
   Limits are `:infinity` in a policy that does not set them (see `new/1`);
   every query intersects with the environment policy, which sets them all.
@@ -58,7 +63,8 @@ defmodule Porthole.Policy do
           timeout_ms: limit(),
           queries_per_minute: limit(),
           max_concurrent: limit(),
-          max_trace_events: limit()
+          max_trace_events: limit(),
+          max_trace_window_ms: limit()
         }
 
   defstruct tiers: [:observe],
@@ -70,7 +76,8 @@ defmodule Porthole.Policy do
             timeout_ms: 10_000,
             queries_per_minute: 60,
             max_concurrent: 4,
-            max_trace_events: 10_000
+            max_trace_events: 10_000,
+            max_trace_window_ms: 10_000
 
   @limits [
     :max_rows,
@@ -80,7 +87,8 @@ defmodule Porthole.Policy do
     :timeout_ms,
     :queries_per_minute,
     :max_concurrent,
-    :max_trace_events
+    :max_trace_events,
+    :max_trace_window_ms
   ]
 
   @doc "All tiers, least to most powerful."

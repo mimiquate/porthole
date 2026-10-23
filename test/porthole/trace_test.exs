@@ -153,6 +153,8 @@ defmodule Porthole.TraceTest do
       assert result.rows == [[0]]
       assert [note] = result.notes
       assert note =~ "TraceTest.Nobody is not running on this node"
+      # Informative, not a cut.
+      refute result.truncated
     end
   end
 
@@ -246,6 +248,14 @@ defmodule Porthole.TraceTest do
                query("SELECT * FROM processes", trace: %{messages_to: "x"})
 
       assert message =~ "query that table"
+
+      assert {:error, %Error{reason: :bad_request, message: message}} =
+               query("SELECT * FROM trace_messages",
+                 trace: %{messages_to: "x"},
+                 window_ms: 20_000
+               )
+
+      assert message =~ "at most 10000"
 
       Application.put_env(:porthole, :policy, [])
 

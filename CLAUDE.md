@@ -55,8 +55,10 @@ when a real question needs it.
   `exits` → `trace_exits` (the target and its `$ancestors` descendants, with `procs` +
   `set_on_spawn` so restarts are traced; reason *class* only, VM errors named as Elixir
   exceptions, and location). `Porthole.Gather.trace/7` (events) and `trace_calls/5` (counters) run on the node by evaluation
-  (allowed modules gained `:trace` and `:code`). Policy limit `max_trace_events` (10,000 per
-  node). Notes say when a trace stopped at the limit, read only part of its events, or found
+  (allowed modules gained `:trace` and `:code`). Policy limits `max_trace_events` (10,000 per
+  node) and `max_trace_window_ms` (10 s: lower than `max_window_ms`, since a trace costs while
+  it runs). Trace notes are `:cut` (event limit, unread events, rows: `truncated`) or `:info`
+  (nothing traced on a node: not `truncated`). Notes say when a trace stopped at the limit, read only part of its events, or found
   nothing to trace (not running, not loaded, refused, no such function).
   Implementation lessons:
   - A message sent by registered name has the *name* as its receiver in send match specs:

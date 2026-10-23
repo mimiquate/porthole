@@ -92,7 +92,7 @@ defmodule Porthole.TraceRemoteTest do
   end
 
   test "the trace stops when the query is abandoned", %{node: node, baseline: baseline} do
-    task = Task.async(fn -> trace_query(node, 30_000) end)
+    task = Task.async(fn -> trace_query(node, 10_000) end)
     eventually(fn -> sessions(node) == baseline + 1 end)
 
     Task.shutdown(task, :brutal_kill)
@@ -100,7 +100,7 @@ defmodule Porthole.TraceRemoteTest do
   end
 
   test "the trace stops when the connection drops", %{node: node, baseline: baseline} do
-    task = Task.async(fn -> trace_query(node, 30_000) end)
+    task = Task.async(fn -> trace_query(node, 10_000) end)
     eventually(fn -> sessions(node) == baseline + 1 end)
 
     true = :erlang.disconnect_node(node)

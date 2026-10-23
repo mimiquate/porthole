@@ -426,7 +426,8 @@ config :porthole, :policy,
   # How much load agents may put on the cluster.
   queries_per_minute: 60,    # per client (token)
   max_concurrent: 4,         # queries running at once, across all clients
-  max_trace_events: 10_000   # events one trace may produce per node
+  max_trace_events: 10_000,  # events one trace may produce per node
+  max_trace_window_ms: 10_000  # longest trace (tracing costs while it runs)
 ```
 
 The values above are the defaults. A token's `policy:` can lower any of them
@@ -496,11 +497,16 @@ trace setting it made as soon as that process ends, whatever the reason.
 It ends at the end of the window, when the query is abandoned, or when the
 connection to the sidecar drops; it also stops itself:
 
+- **at the end of its window**, at most `max_trace_window_ms` (10 s by
+  default, shorter than other windows: a trace costs for as long as it runs);
 - **at the event limit** (`max_trace_events`, 10,000 by default per node),
   counted as the VM *produces* events, not as they are read: on every event,
   and by a watchdog process that checks every millisecond. Past the limit,
   the result is a sample of the first part of the window, and `notes` says
-  how long it covers;
+  how long it covers. Raise it with care: events wait in the tracing process
+  until they are read (about 20,000 a second), under its memory cap, and far
+  above the default (~100,000 and more) a flood can fill that cap, in which
+  case the trace returns nothing;
 - **past a memory cap**: the VM itself stops a trace that holds too much;
 - **within the deadline**: on a busy node the trace (at low priority, like
   all collection) reads its events slowly; what it has not read when its time

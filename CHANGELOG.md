@@ -17,9 +17,12 @@
   `PORTHOLE_TRACE=true` (sidecar), `--trace` (`fly.up`, `k8s.up`) or
   `--allow-trace` (`mcp`, `server`). Each trace runs in an OTP trace session
   that the VM removes when it ends (including when the query is abandoned or
-  the connection drops), stops at `max_trace_events` (10,000 per node, new
-  policy limit) counted as events are produced, and on a busy node returns
-  the events it could read with a note instead of timing out.
+  the connection drops), lasts at most `max_trace_window_ms` (10 s, new
+  policy limit), stops at `max_trace_events` (10,000 per node, new policy
+  limit) counted as events are produced, and on a busy node returns the
+  events it could read with a note instead of timing out.
+- A note that only informs (a trace found nothing to trace on a node) no
+  longer marks the result `truncated`.
 
 ## 0.1.1 - 2026-10-07
 

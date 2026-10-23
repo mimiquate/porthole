@@ -141,48 +141,56 @@ defmodule Porthole.Trace do
   defp describe_calls(modules, function, arity), do: "#{List.last(modules)}.#{function}/#{arity}"
 
   @doc """
-  Notes for the agent about one node's trace: why nothing was traced there,
-  or why it stopped before the end of the window.
+  Notes for the agent about one node's trace: why nothing was traced there
+  (`:info`), or what a limit left out (`:cut`, which makes the result
+  `truncated`).
   """
-  @spec notes(map(), t(), pos_integer(), pos_integer()) :: [String.t()]
+  @spec notes(map(), t(), pos_integer(), pos_integer()) :: [{:cut | :info, String.t()}]
   def notes(raw, trace, window_ms, max_rows) do
     target = describe(trace)
 
     case raw do
       %{status: :not_found} ->
-        ["#{target} is not running on this node: nothing was traced here"]
+        [{:info, "#{target} is not running on this node: nothing was traced here"}]
 
       %{status: :not_loaded} ->
         [
-          "no module #{target} is loaded on this node: nothing was traced here (modules can " <>
-            "load on first use; check the name)"
+          {:info,
+           "no module #{target} is loaded on this node: nothing was traced here (modules " <>
+             "can load on first use; check the name)"}
         ]
 
       %{status: :refused} ->
         [
-          "#{target} is part of OTP or Elixir: tracing it would slow down the whole node, " <>
-            "trace the application's own modules"
+          {:info,
+           "#{target} is part of OTP or Elixir: tracing it would slow down the whole node, " <>
+             "trace the application's own modules"}
         ]
 
       %{status: :no_function} ->
-        ["#{target}: no such function on this node, nothing was traced here"]
+        [{:info, "#{target}: no such function on this node, nothing was traced here"}]
 
       %{status: :ok} = raw ->
         List.flatten([
           if(raw.stopped == :events,
             do:
-              "the trace reached its event limit (max_trace_events) after " <>
-                "#{Enum.min([raw.elapsed_ms, window_ms])} ms of the #{window_ms} ms window and " <>
-                "stopped: the rows are a sample of that time",
+              {:cut,
+               "the trace reached its event limit (max_trace_events) after " <>
+                 "#{Enum.min([raw.elapsed_ms, window_ms])} ms of the #{window_ms} ms window " <>
+                 "and stopped: the rows are a sample of that time"},
             else: []
           ),
           if(raw.read == :deadline,
             do:
-              "the node was too busy to read every event in time (tracing runs at low " <>
-                "priority): only the first #{raw.events} events are included",
+              {:cut,
+               "the node was too busy to read every event in time (tracing runs at low " <>
+                 "priority): only the first #{raw.events} events are included"},
             else: []
           ),
-          if(raw.truncated, do: "only the first #{max_rows} rows were kept (max_rows)", else: [])
+          if(raw.truncated,
+            do: {:cut, "only the first #{max_rows} rows were kept (max_rows)"},
+            else: []
+          )
         ])
     end
   end
