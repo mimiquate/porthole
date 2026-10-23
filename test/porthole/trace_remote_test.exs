@@ -111,6 +111,35 @@ defmodule Porthole.TraceRemoteTest do
     eventually(fn -> sessions(node) == baseline end)
   end
 
+  test "a trace stops at the end of its window while events keep coming", %{node: node} do
+    # Senders at several speeds, some just faster than the trace reads, so its
+    # mailbox never empties. The event limit is too high to stop it.
+    for work <- [2_000, 3_600, 6_400] do
+      sender =
+        :erpc.call(node, :erl_eval, :exprs, [
+          ~c"spawn(fun S() -> trace_inbox ! {order_event, 1}, _ = lists:seq(1, W), S() end)."
+          |> :erl_scan.string()
+          |> elem(1)
+          |> :erl_parse.parse_exprs()
+          |> elem(1),
+          %{W: work}
+        ])
+        |> elem(1)
+
+      result =
+        Porthole.Remote.run(
+          node,
+          :trace,
+          [self(), {:messages_to, {:name, ["trace_inbox"]}}, 300, 200, 50_000, 10],
+          5_000
+        )
+
+      :erpc.call(node, :erlang, :exit, [sender, :kill])
+      assert {:ok, %{status: :ok, elapsed_ms: elapsed_ms}} = result
+      assert elapsed_ms <= 450, "work=#{work}: stopped after #{elapsed_ms} ms"
+    end
+  end
+
   test "a flood is stopped at the event limit", %{node: node, baseline: baseline} do
     {:ok, flood} =
       :erpc.call(node, :timer, :send_interval, [

@@ -71,6 +71,12 @@ when a real question needs it.
     the timeout) after the trace stops and returns what it read, with a note. Measured
     after the fix: idle 2–4 s, saturated 8 s with 8.4k events; the flood stopped after
     12–50 ms; sessions always gone. Events beyond the limit are left unread (freed at exit).
+  - The window's end must be checked while reading, not only in `receive ... after`
+    (which fires only on an empty mailbox): a sender just faster than the tracer reads kept
+    traces running past their window until the event limit or the heap cap (found in
+    review, 2026-10-23; the evaluated tracer reads only ~20k events/s on a quiet laptop, and
+    a backlog of ~200k events reaches the heap cap, losing the results; the default 10k
+    limit keeps the backlog small).
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox

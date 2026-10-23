@@ -543,7 +543,9 @@ defmodule Porthole.Gather do
     end
 
     # Reads events until the window ends, the querier goes away or
-    # max_events were produced (read + still queued).
+    # max_events were produced (read + still queued). The window's end is
+    # also checked while events keep coming (`after` only fires on an empty
+    # mailbox), every 100 events.
     read = fn read, keep, rows, count ->
       left = max(0, window_end - :erlang.monotonic_time(:millisecond))
 
@@ -559,8 +561,15 @@ defmodule Porthole.Gather do
           {:message_queue_len, queued} = :erlang.process_info(me, :message_queue_len)
 
           case count + 1 + queued >= max_events do
-            true -> {:events, rows, count + 1}
-            false -> read.(read, keep, rows, count + 1)
+            true ->
+              {:events, rows, count + 1}
+
+            false ->
+              case rem(count, 100) == 0 and
+                     :erlang.monotonic_time(:millisecond) >= window_end do
+                true -> {:window, rows, count + 1}
+                false -> read.(read, keep, rows, count + 1)
+              end
           end
 
         :porthole_watchdog ->
