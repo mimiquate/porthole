@@ -26,7 +26,7 @@ defmodule Porthole.Query do
   @compile {:no_warn_undefined, Exqlite.Sqlite3}
 
   alias Exqlite.Sqlite3
-  alias Porthole.{Collector, Error, Limiter, Policy, Result, Table, Term}
+  alias Porthole.{Collector, Error, Limiter, Policy, Result, Table, Term, Trace}
 
   @deny ~w(attach detach pragma insert update delete create_table drop_table create_index
            drop_index create_trigger drop_trigger create_view drop_view alter_table reindex
@@ -56,6 +56,8 @@ defmodule Porthole.Query do
       instead of walking the applications' supervision trees. Also finds
       supervisors outside those trees, at a cost proportional to the number
       of processes. Default `false`.
+    * `:trace` - trace during the window, filling a trace table (see
+      `Porthole.Trace`). Needs `:window_ms` and the `:trace` tier.
   """
   @spec run(String.t(), keyword()) :: {:ok, Result.t()} | {:error, Error.t()}
   def run(sql, opts \\ []) do
@@ -84,29 +86,92 @@ defmodule Porthole.Query do
 
     with :ok <- Policy.authorize(policy, :observe),
          :ok <- check_window(window, policy),
+         {:ok, trace} <- Trace.parse(opts[:trace]),
+         :ok <- check_trace(trace, window, policy),
          {:ok, nodes} <- nodes(opts[:nodes]),
          {:ok, nodes} <- only(nodes, opts[:only_nodes], opts[:nodes]),
+         :ok <- check_trace_nodes(trace, nodes),
          :ok <- Policy.authorize_nodes(policy, nodes),
          {:ok, ticket} <- Limiter.acquire(opts[:client], policy) do
       try do
-        run_admitted(sql, nodes, window, policy, opts[:all_supervisors] == true)
+        run_admitted(sql, nodes, window, policy, opts[:all_supervisors] == true, trace)
       after
         Limiter.release(ticket)
       end
     end
   end
 
-  defp run_admitted(sql, nodes, window, policy, all_supervisors) do
-    tables = for table <- Table.all(), sql =~ ~r/\b#{table.name()}\b/i, do: table
+  defp run_admitted(sql, nodes, window, policy, all_supervisors, trace) do
+    tables =
+      for table <- Table.all() ++ Table.traces(), sql =~ ~r/\b#{table.name()}\b/i, do: table
+
     # A query on the schema lists every table (agents check what they can
     # query), but only the tables a query names are collected: the others
     # are created empty.
     listed = if sql =~ ~r/\bsqlite_(master|schema)\b/i, do: Table.all() -- tables, else: []
 
     # Invalid SQL and writes fail before any node is touched.
-    with :ok <- validate(sql, tables ++ listed, window) do
-      load_and_run(sql, tables, listed, nodes, window, policy, all_supervisors)
+    with :ok <- check_trace_tables(tables, trace),
+         :ok <- validate(sql, tables ++ listed, window) do
+      load_and_run(sql, tables, listed, nodes, window, policy, {all_supervisors, trace})
     end
+  end
+
+  defp check_trace(nil, _window, _policy), do: :ok
+
+  defp check_trace(_trace, nil, _policy),
+    do:
+      {:error,
+       Error.new(
+         :window_required,
+         "a trace runs during the window: pass window_ms too (e.g. 5000)"
+       )}
+
+  defp check_trace(_trace, _window, policy), do: Policy.authorize(policy, :trace)
+
+  # A pid is <0.X.Y> on every node: it names a process on one node only.
+  defp check_trace_nodes(trace, nodes) do
+    if trace != nil and Trace.pid?(trace) and length(nodes) > 1,
+      do:
+        {:error,
+         Error.new(
+           :bad_request,
+           "a pid names a process on one node: pass nodes with only that node " <>
+             "(processes.node), or trace a registered name"
+         )},
+      else: :ok
+  end
+
+  # Trace tables are filled only by the trace that matches them, and a trace
+  # is only worth running if its table is queried.
+  defp check_trace_tables(tables, trace) do
+    expected = if trace, do: Trace.table(trace)
+
+    case Enum.find(tables, &(Table.traced?(&1) and &1 != expected)) do
+      nil ->
+        check_trace_queried(tables, expected)
+
+      table ->
+        {:error,
+         Error.new(
+           :bad_request,
+           "#{table.name()} holds the results of a trace: pass #{Trace.usage(table)} and window_ms"
+         )}
+    end
+  end
+
+  defp check_trace_queried(_tables, nil), do: :ok
+
+  defp check_trace_queried(tables, expected) when is_atom(expected) do
+    if expected in tables,
+      do: :ok,
+      else:
+        {:error,
+         Error.new(
+           :bad_request,
+           "the trace's results are in #{expected.name()}: query that table " <>
+             "(e.g. SELECT * FROM #{expected.name()})"
+         )}
   end
 
   # Prepares the SQL against the tables' (empty) definitions, with the same
@@ -136,12 +201,13 @@ defmodule Porthole.Query do
     end
   end
 
-  defp load_and_run(sql, tables, listed, nodes, window, policy, all_supervisors) do
+  defp load_and_run(sql, tables, listed, nodes, window, policy, {all_supervisors, trace}) do
     {:ok, conn} = Sqlite3.open(":memory:")
     :ok = Sqlite3.execute(conn, "PRAGMA hard_heap_limit = #{sqlite_heap_limit()}")
 
     try do
-      {cuts, errors} = load(conn, tables, listed, nodes, window, policy, all_supervisors)
+      {cuts, errors} =
+        load(conn, tables, listed, nodes, window, policy, {all_supervisors, trace})
 
       with {:ok, columns, rows, more?} <- execute(conn, sql, window, policy) do
         {rows, shortened} = shorten_cells(rows)
@@ -201,6 +267,8 @@ defmodule Porthole.Query do
       "#{name} on #{node}: collection stopped at #{policy.max_rows} rows (max_rows), " <>
         "#{loaded} loaded; aggregates are incomplete"
 
+  defp cut_note(name, node, {:note, note}, _policy), do: "#{name} on #{node}: #{note}"
+
   defp cut_note(name, node, {:bytes, loaded}, policy),
     do:
       "#{name} on #{node}: only #{loaded} rows were loaded, this node's share of the " <>
@@ -210,7 +278,7 @@ defmodule Porthole.Query do
   # answers, so the rows of only one node are held at a time. Every node and
   # table gets an equal share of the policy's max_bytes; rows beyond a share
   # are not loaded. Returns the cuts and the nodes that failed.
-  defp load(conn, tables, listed, nodes, window, policy, all_supervisors) do
+  defp load(conn, tables, listed, nodes, window, policy, {all_supervisors, trace}) do
     :ok = Sqlite3.execute(conn, "BEGIN")
     inserts = Map.new(tables, &{&1, create_table(conn, &1, window != nil)})
 
@@ -220,7 +288,13 @@ defmodule Porthole.Query do
     end
 
     share = div(policy.max_bytes, max(length(nodes) * length(tables), 1))
-    limits = %{max_rows: policy.max_rows, all_supervisors: all_supervisors}
+
+    limits = %{
+      max_rows: policy.max_rows,
+      all_supervisors: all_supervisors,
+      trace: trace,
+      max_events: policy.max_trace_events
+    }
 
     {cuts, errors} =
       Collector.reduce(
@@ -233,6 +307,18 @@ defmodule Porthole.Query do
         fn
           node, table, rows, truncated, cuts ->
             {statement, columns} = inserts[table]
+
+            notes =
+              case truncated do
+                {:trace, report} ->
+                  for note <- Trace.notes(report, trace, window, policy.max_rows),
+                      do: {table.name(), node, {:note, note}}
+
+                _other ->
+                  []
+              end
+
+            cuts = Enum.reverse(notes, cuts)
 
             case insert(conn, statement, columns, Atom.to_string(node), rows, share) do
               {:all, loaded} when truncated == :rows ->

@@ -42,9 +42,10 @@ defmodule Porthole.Table do
 
   @doc """
   Turns raw data from the gather function into rows; the flag tells whether
-  rows were left out. Runs on the querying node.
+  rows were left out (trace tables return what the trace reported instead,
+  for notes). Runs on the querying node.
   """
-  @callback shape(raw :: term()) :: {[row()], truncated :: boolean()}
+  @callback shape(raw :: term()) :: {[row()], truncated :: boolean() | {:trace, map()}}
 
   @tables [
     Porthole.Tables.Processes,
@@ -55,14 +56,30 @@ defmodule Porthole.Table do
     Porthole.Tables.System
   ]
 
-  @doc "All table modules."
+  # Filled during the window by a trace (see Porthole.Trace), not collected
+  # as snapshots.
+  @traces [
+    Porthole.Tables.TraceMessages,
+    Porthole.Tables.TraceCalls,
+    Porthole.Tables.TraceExits
+  ]
+
+  @doc "All snapshot table modules."
   @spec all() :: [module()]
   def all, do: @tables
+
+  @doc "All trace table modules (see `Porthole.Trace`)."
+  @spec traces() :: [module()]
+  def traces, do: @traces
+
+  @doc "Whether `table` holds a trace's results."
+  @spec traced?(module()) :: boolean()
+  def traced?(table), do: table in @traces
 
   @doc "Finds a table module by name."
   @spec fetch(String.t()) :: {:ok, module()} | :error
   def fetch(name) do
-    case Enum.find(@tables, &(&1.name() == name)) do
+    case Enum.find(@tables ++ @traces, &(&1.name() == name)) do
       nil -> :error
       table -> {:ok, table}
     end

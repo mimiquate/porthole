@@ -2,13 +2,16 @@ defmodule Porthole.GuidesTest do
   @moduledoc """
   Runs every SQL block in guides/ against the demo tree, so documented
   queries stay valid as the schema evolves. A block's `-- window_ms: N`
-  comment makes it run with a (shortened) sampling window.
+  comment makes it run with a (shortened) sampling window, and
+  `-- trace: kind=target` with that trace.
   """
   use ExUnit.Case, async: false
 
   setup_all do
     Porthole.Demo.start()
     on_exit(&Porthole.Demo.stop/0)
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
     Process.sleep(100)
     :ok
   end
@@ -23,8 +26,19 @@ defmodule Porthole.GuidesTest do
     test "#{Path.basename(path)} query ##{index + 1}" do
       window = if Regex.match?(~r/-- window_ms: \d+/, @sql), do: 50
 
-      assert {:ok, %Porthole.Result{}} = Porthole.query(@sql, window_ms: window),
-             "query failed:\n#{@sql}\n#{inspect(Porthole.query(@sql, window_ms: window))}"
+      trace =
+        case Regex.run(~r/-- trace: (\w+)=(\S+)/, @sql) do
+          [_, kind, target] -> %{kind => target}
+          nil -> nil
+        end
+
+      opts = [window_ms: if(trace, do: 300, else: window), trace: trace]
+
+      assert {:ok, %Porthole.Result{} = result} = Porthole.query(@sql, opts),
+             "query failed:\n#{@sql}\n#{inspect(Porthole.query(@sql, opts))}"
+
+      # A trace example must find something in the demo.
+      if trace, do: assert(result.rows != [], "no rows:\n#{@sql}")
     end
   end
 end

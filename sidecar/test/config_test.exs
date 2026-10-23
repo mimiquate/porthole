@@ -1,5 +1,5 @@
 defmodule PortholeSidecar.ConfigTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias PortholeSidecar.Config
 
@@ -14,6 +14,22 @@ defmodule PortholeSidecar.ConfigTest do
 
     assert {config.port, config.ip, config.follow_peers, config.tls} ==
              {4040, {0, 0, 0, 0}, true, []}
+  end
+
+  test "PORTHOLE_TRACE lets queries trace" do
+    Application.delete_env(:porthole, :policy)
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    Config.from_env!(Map.put(@tokens, "DNS_CLUSTER_QUERY", "shop.internal"))
+    assert Porthole.Policy.environment().tiers == [:observe]
+
+    Config.from_env!(
+      @tokens
+      |> Map.put("DNS_CLUSTER_QUERY", "shop.internal")
+      |> Map.put("PORTHOLE_TRACE", "true")
+    )
+
+    assert Porthole.Policy.environment().tiers == [:observe, :trace]
   end
 
   test "PORTHOLE_NODES takes hosts and full node names" do

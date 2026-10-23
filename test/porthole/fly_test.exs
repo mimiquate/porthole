@@ -157,6 +157,13 @@ defmodule Porthole.FlyTest do
     end
   end
 
+  test "tracing is off unless --trace" do
+    alias Mix.Tasks.Porthole.Fly.Up
+
+    refute "PORTHOLE_TRACE=true" in Up.deploy_env("shop.internal", [])
+    assert "PORTHOLE_TRACE=true" in Up.deploy_env("shop.internal", trace: true)
+  end
+
   test "the sidecar's Fly config travels with the code, not the checkout" do
     config =
       Porthole.Fly.with_config(fn path ->

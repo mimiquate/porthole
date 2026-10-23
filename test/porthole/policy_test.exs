@@ -4,12 +4,13 @@ defmodule Porthole.PolicyTest do
 
   alias Porthole.{Error, Policy}
 
-  test "every tier is defined, only observe is implemented" do
+  test "every tier is defined, observe and trace are implemented" do
     policy = Policy.new()
     assert Policy.tiers() == [:observe, :trace, :evaluate, :mutate]
     assert :ok = Policy.authorize(policy, :observe)
+    assert :ok = Policy.authorize(policy, :trace)
 
-    for tier <- [:trace, :evaluate, :mutate] do
+    for tier <- [:evaluate, :mutate] do
       assert {:error, %Error{reason: :not_enabled}} = Policy.authorize(policy, tier)
     end
   end

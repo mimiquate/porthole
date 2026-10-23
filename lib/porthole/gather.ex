@@ -348,6 +348,370 @@ defmodule Porthole.Gather do
     %{loaded: :application.loaded_applications(), running: :application.which_applications()}
   end
 
+  @doc """
+  Traces `spec` for `window_ms` in an OTP trace session, and returns the
+  events it kept (at most `max_events` events, `max_rows` rows):
+
+    * `{:messages_to, target}` - messages sent to a process: sender, tag and
+      time of each (the message itself is dropped here, on the node);
+    * `{:exits, target}` - exits of a process and of every process it starts
+      during the window, with the reason's class and where it was raised.
+
+  A target is `{:name, candidates}` (registered names to try) or
+  `{:pid, text}`. Names only resolve to atoms that already exist: nothing is
+  created on the node.
+
+  The session belongs to this process: when it ends for any reason, the VM
+  removes the session and every trace setting it made. It ends at the end of
+  the window, when the querying process (`querier`, monitored) goes away, or
+  when the events produced reach `max_events`. Events are counted as they are
+  produced, not as they are read (evaluated code reads them far slower than
+  the VM produces them): this process checks its queue on every event, a
+  watchdog at maximum priority checks it every millisecond, and the VM
+  kills this process past a heap cap (which also ends the session).
+
+  This process runs at low priority, so on a busy node it may read events
+  slowly: events still unread `read_ms` after the trace stopped are left out
+  (and reported), rather than letting the whole collection time out.
+  """
+  @spec trace(pid(), pid(), tuple(), pos_integer(), pos_integer(), pos_integer(), pos_integer()) ::
+          map()
+  def trace(_caller, querier, spec, window_ms, read_ms, max_events, max_rows) do
+    me = self()
+    # The events are copies of the traced messages: past this, the VM kills
+    # this process, and the session goes with it.
+    :erlang.process_flag(:max_heap_size, %{size: 4_000_000, kill: true, error_logger: false})
+    querier_ref = :erlang.monitor(:process, querier)
+    started = :erlang.monotonic_time(:nanosecond)
+    window_end = :erlang.monotonic_time(:millisecond) + window_ms
+    at = fn ts -> div(ts - started, 1_000_000) end
+
+    # -- Which process: the target, if it is running ----------------------
+
+    existing = fn text ->
+      try do
+        {:ok, :erlang.binary_to_existing_atom(text, :utf8)}
+      catch
+        :error, _ -> :none
+      end
+    end
+
+    target =
+      case elem(spec, 1) do
+        {:pid, text} ->
+          try do
+            pid = :erlang.list_to_pid(text)
+            if :erlang.is_process_alive(pid), do: [pid], else: []
+          catch
+            :error, _ -> []
+          end
+
+        {:name, candidates} ->
+          for text <- candidates,
+              {:ok, name} <- [existing.(text)],
+              pid = :erlang.whereis(name),
+              is_pid(pid),
+              do: pid
+      end
+
+    # -- What is kept of an event ------------------------------------------
+
+    # The atom that says what kind of message `message` is, if it has one
+    # (its first element, a struct's name, a GenServer request's own tag).
+    tag = fn
+      _tag, atom when is_atom(atom) -> atom
+      tag, {:"$gen_call", _from, request} -> {:call, tag.(tag, request)}
+      tag, {:"$gen_cast", request} -> {:cast, tag.(tag, request)}
+      _tag, tuple when tuple_size(tuple) > 0 and is_atom(elem(tuple, 0)) -> elem(tuple, 0)
+      _tag, %{__struct__: struct} when is_atom(struct) -> struct
+      _tag, _other -> nil
+    end
+
+    # An exit reason's class, and where it was raised; never its data.
+    location = fn
+      [{module, function, arity, _} | _] when is_integer(arity) -> {module, function, arity}
+      [{module, function, args, _} | _] when is_list(args) -> {module, function, length(args)}
+      _other -> nil
+    end
+
+    class = fn
+      reason when reason in [:normal, :shutdown, :killed] -> {reason, nil}
+      {:shutdown, _} -> {:shutdown, nil}
+      {%{__exception__: true, __struct__: struct}, stack} -> {struct, location.(stack)}
+      {reason, stack} when is_atom(reason) and is_list(stack) -> {reason, location.(stack)}
+      {{reason, _}, stack} when is_atom(reason) and is_list(stack) -> {reason, location.(stack)}
+      reason when is_atom(reason) -> {reason, nil}
+      reason when tuple_size(reason) > 0 and is_atom(elem(reason, 0)) -> {elem(reason, 0), nil}
+      _other -> {:other, nil}
+    end
+
+    # -- The trace: what to enable in the session, what to keep ------------
+
+    plan =
+      case {spec, target} do
+        {_spec, []} ->
+          :not_found
+
+        {{:messages_to, _}, [receiver | _]} ->
+          # A message sent by registered name has the name as its receiver.
+          names =
+            case :erlang.process_info(receiver, :registered_name) do
+              {:registered_name, name} when name != [] -> [{[name, :_], [], []}]
+              _none -> []
+            end
+
+          enable = fn session ->
+            :trace.send(session, [{[receiver, :_], [], []} | names], [])
+            :trace.process(session, :all, true, [:send, :monotonic_timestamp])
+          end
+
+          keep = fn
+            {:trace_ts, sender, :send, message, _to, ts} ->
+              {sender, receiver, tag.(tag, message), at.(ts)}
+
+            _other ->
+              nil
+          end
+
+          {enable, keep}
+
+        {{:exits, _}, [root | _]} ->
+          name =
+            case :erlang.process_info(root, :registered_name) do
+              {:registered_name, name} -> name
+              _gone -> []
+            end
+
+          # The target and every process it started (by $ancestors, which
+          # proc_lib sets), plus every process they start from now on.
+          flags = [:procs, :set_on_spawn, :monotonic_timestamp]
+
+          enable = fn session ->
+            for pid <- :erlang.processes(),
+                pid != me,
+                {_, ancestors} <- [:erlang.process_info(pid, {:dictionary, :"$ancestors"})],
+                is_list(ancestors),
+                :lists.member(root, ancestors) or (name != [] and :lists.member(name, ancestors)),
+                do: :trace.process(session, pid, true, flags)
+
+            :trace.process(session, root, true, flags)
+          end
+
+          keep = fn
+            {:trace_ts, pid, :exit, reason, ts} ->
+              {reason_class, where} = class.(reason)
+              {pid, reason_class, where, at.(ts)}
+
+            _other ->
+              nil
+          end
+
+          {enable, keep}
+      end
+
+    # -- Collecting events, within the limits ------------------------------
+
+    # Holds the session too, at maximum priority: a low-priority tracer may
+    # not run for a while on a busy node, while events keep coming.
+    watchdog = fn session ->
+      :erlang.spawn(fn ->
+        :erlang.process_flag(:priority, :max)
+        ref = :erlang.monitor(:process, me)
+
+        watch = fn watch ->
+          receive do
+            {:DOWN, ^ref, _, _, _} ->
+              :ok
+
+            :porthole_stop ->
+              :ok
+          after
+            1 ->
+              case :erlang.process_info(me, :message_queue_len) do
+                {:message_queue_len, queued} when queued >= max_events ->
+                  :trace.session_destroy(session)
+                  send(me, :porthole_watchdog)
+
+                _other ->
+                  watch.(watch)
+              end
+          end
+        end
+
+        watch.(watch)
+      end)
+    end
+
+    # Reads events until the window ends, the querier goes away or
+    # max_events were produced (read + still queued).
+    read = fn read, keep, rows, count ->
+      left = max(0, window_end - :erlang.monotonic_time(:millisecond))
+
+      receive do
+        event when elem(event, 0) == :trace_ts ->
+          rows = if (row = keep.(event)) == nil, do: rows, else: [row | rows]
+          {:message_queue_len, queued} = :erlang.process_info(me, :message_queue_len)
+
+          if count + 1 + queued >= max_events,
+            do: {:events, rows, count + 1},
+            else: read.(read, keep, rows, count + 1)
+
+        :porthole_watchdog ->
+          {:events, rows, count}
+
+        {:DOWN, ^querier_ref, _, _, _} ->
+          {:querier, rows, count}
+      after
+        left -> {:window, rows, count}
+      end
+    end
+
+    # Events already produced when the session ended, up to max_events and
+    # until `until`. The rest are left unread: the VM frees them when this
+    # process exits.
+    drain = fn
+      _drain, _keep, _until, rows, count when count >= max_events ->
+        {rows, count, :all}
+
+      drain, keep, until, rows, count ->
+        receive do
+          event when elem(event, 0) == :trace_ts ->
+            rows = if (row = keep.(event)) == nil, do: rows, else: [row | rows]
+
+            # The clock is read every 100 events.
+            if rem(count, 100) == 0 and :erlang.monotonic_time(:millisecond) > until,
+              do: {rows, count + 1, :deadline},
+              else: drain.(drain, keep, until, rows, count + 1)
+        after
+          0 -> {rows, count, :all}
+        end
+    end
+
+    case plan do
+      :not_found ->
+        %{status: :not_found}
+
+      {enable, keep} ->
+        session = :trace.session_create(:porthole, me, [])
+        enable.(session)
+        dog = watchdog.(session)
+        {stopped, rows, count} = read.(read, keep, [], 0)
+        :trace.session_destroy(session)
+        send(dog, :porthole_stop)
+        elapsed_ms = div(:erlang.monotonic_time(:nanosecond) - started, 1_000_000)
+        until = :erlang.monotonic_time(:millisecond) + read_ms
+        {rows, count, read} = drain.(drain, keep, until, rows, count)
+        rows = :lists.reverse(rows)
+
+        %{
+          status: :ok,
+          rows: :lists.sublist(rows, max_rows),
+          truncated: length(rows) > max_rows,
+          stopped: stopped,
+          events: count,
+          read: read,
+          elapsed_ms: elapsed_ms
+        }
+    end
+  end
+
+  @doc """
+  Counts calls to a module's functions (or to one function) for
+  `window_ms`, per process, with their running time (`call_time` in an OTP
+  trace session: the VM keeps counters, no event is sent per call). At most
+  `max_rows` rows. `modules` are names to try; names only resolve to atoms
+  that already exist.
+
+  Modules of OTP and Elixir themselves are refused: their functions run
+  everywhere, and tracing them would slow down the whole node. The session
+  ends with this process, at the end of the window or when `querier` goes
+  away.
+  """
+  @spec trace_calls(pid(), pid(), tuple(), pos_integer(), pos_integer()) :: map()
+  def trace_calls(_caller, querier, {modules, function, arity}, window_ms, max_rows) do
+    started = :erlang.monotonic_time(:nanosecond)
+    querier_ref = :erlang.monitor(:process, querier)
+
+    existing = fn text ->
+      try do
+        {:ok, :erlang.binary_to_existing_atom(text, :utf8)}
+      catch
+        :error, _ -> :none
+      end
+    end
+
+    loaded =
+      for text <- modules,
+          {:ok, module} <- [existing.(text)],
+          :erlang.module_loaded(module),
+          do: module
+
+    case loaded do
+      [] ->
+        %{status: :not_loaded}
+
+      [module | _] ->
+        refused =
+          :code.is_loaded(module) == {:file, :preloaded} or
+            :lists.member(:application.get_application(module), [
+              {:ok, :kernel},
+              {:ok, :stdlib},
+              {:ok, :elixir},
+              {:ok, :compiler}
+            ])
+
+        functions =
+          for {f, a} <- :erlang.get_module_info(module, :functions),
+              function == nil or existing.(function) == {:ok, f},
+              arity == nil or arity == a,
+              do: {f, a}
+
+        cond do
+          refused ->
+            %{status: :refused, module: module}
+
+          functions == [] ->
+            %{status: :no_function, module: module}
+
+          true ->
+            session = :trace.session_create(:porthole, self(), [])
+            :trace.process(session, :all, true, [:call])
+
+            :lists.foreach(
+              fn {f, a} -> :trace.function(session, {module, f, a}, true, [:call_time]) end,
+              functions
+            )
+
+            stopped =
+              receive do
+                {:DOWN, ^querier_ref, _, _, _} -> :querier
+              after
+                window_ms -> :window
+              end
+
+            rows =
+              for {f, a} <- functions,
+                  {:call_time, counters} <- [:trace.info(session, {module, f, a}, :call_time)],
+                  is_list(counters),
+                  {pid, count, seconds, us} <- counters,
+                  count > 0,
+                  do: {pid, {module, f, a}, count, seconds * 1_000_000 + us}
+
+            :trace.session_destroy(session)
+
+            %{
+              status: :ok,
+              rows: :lists.sublist(rows, max_rows),
+              truncated: length(rows) > max_rows,
+              stopped: stopped,
+              events: 0,
+              read: :all,
+              elapsed_ms: div(:erlang.monotonic_time(:nanosecond) - started, 1_000_000)
+            }
+        end
+    end
+  end
+
   @doc "VM-wide memory, counts, limits and load."
   @spec system(pid()) :: map()
   def system(_caller) do

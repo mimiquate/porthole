@@ -1,0 +1,273 @@
+defmodule Porthole.TraceTest do
+  use ExUnit.Case, async: false
+
+  alias Porthole.Error
+
+  @moduletag :capture_log
+
+  setup do
+    previous = Application.get_env(:porthole, :policy)
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:porthole, :policy, previous),
+        else: Application.delete_env(:porthole, :policy)
+    end)
+  end
+
+  defmodule Inbox do
+    @moduledoc false
+    use GenServer
+    def start_link(name), do: GenServer.start_link(__MODULE__, nil, name: name)
+    @impl true
+    def init(nil), do: {:ok, nil}
+    @impl true
+    def handle_call(_request, _from, state), do: {:reply, :ok, state}
+    @impl true
+    def handle_cast(_request, state), do: {:noreply, state}
+    @impl true
+    def handle_info(_message, state), do: {:noreply, state}
+  end
+
+  defmodule Worker do
+    @moduledoc false
+    # Crashes with a FunctionClauseError raised in parse/1, soon after it starts.
+    use GenServer
+    def start_link(ms), do: GenServer.start_link(__MODULE__, ms)
+    @impl true
+    def init(ms) do
+      Process.send_after(self(), :work, ms)
+      {:ok, nil}
+    end
+
+    @impl true
+    def handle_info(:work, state) do
+      parse(:unexpected)
+      {:noreply, state}
+    end
+
+    def parse(%{"amount" => amount}), do: amount
+
+    def busy(n), do: Enum.reduce(1..n, 0, &(&1 + &2))
+  end
+
+  # Sends `message` to `to` every `ms`, until the test ends.
+  defp sender(to, message, ms) do
+    pid =
+      spawn(fn ->
+        loop = fn loop ->
+          send(to, message)
+          Process.sleep(ms)
+          loop.(loop)
+        end
+
+        loop.(loop)
+      end)
+
+    on_exit(fn -> Process.exit(pid, :kill) end)
+    pid
+  end
+
+  defp query(sql, opts), do: Porthole.query(sql, Keyword.put_new(opts, :window_ms, 300))
+
+  describe "messages_to" do
+    test "names who sends to a process, by name or by pid, and what kind of message" do
+      inbox = start_supervised!({Inbox, :trace_test_inbox})
+      by_name = sender(:trace_test_inbox, {:order_event, 1}, 5)
+      by_pid = sender(inbox, :sync, 5)
+
+      caster =
+        spawn(fn ->
+          loop = fn loop ->
+            GenServer.cast(:trace_test_inbox, {:refresh, :all})
+            GenServer.call(:trace_test_inbox, {:quote, "sku"})
+            Process.sleep(5)
+            loop.(loop)
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn -> Process.exit(caster, :kill) end)
+
+      {:ok, result} =
+        query("SELECT sender, tag, count(*) FROM trace_messages GROUP BY 1, 2 ORDER BY 2",
+          trace: %{"messages_to" => "trace_test_inbox"}
+        )
+
+      senders = Map.new(result.rows, fn [sender, tag, _count] -> {tag, sender} end)
+      assert senders["order_event"] == Porthole.Remote.pid(by_name)
+      assert senders["sync"] == Porthole.Remote.pid(by_pid)
+      assert senders["cast:refresh"] == Porthole.Remote.pid(caster)
+      assert senders["call:quote"] == Porthole.Remote.pid(caster)
+      assert result.notes == []
+
+      # By pid, as processes.pid renders it.
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_messages WHERE tag = 'sync'",
+          trace: [messages_to: Porthole.Remote.pid(inbox)]
+        )
+
+      assert [[count]] = result.rows
+      assert count > 0
+    end
+
+    test "keeps nothing of the message but its tag" do
+      start_supervised!({Inbox, :trace_test_secret})
+      sender(:trace_test_secret, {:card, "4242 4242 4242 4242"}, 5)
+      sender(:trace_test_secret, "a bare string", 5)
+
+      {:ok, result} =
+        query("SELECT * FROM trace_messages", trace: %{messages_to: "trace_test_secret"})
+
+      refute inspect(result) =~ "4242"
+      refute inspect(result) =~ "a bare string"
+      assert ["card", nil] -- Enum.map(result.rows, &Enum.at(&1, 3)) == []
+    end
+
+    test "stops at the event limit, and says so" do
+      start_supervised!({Inbox, :trace_test_flood})
+      for _ <- 1..4, do: sender(:trace_test_flood, :tick, 0)
+
+      Application.put_env(:porthole, :policy, tiers: [:observe, :trace], max_trace_events: 500)
+
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_messages",
+          trace: %{messages_to: "trace_test_flood"},
+          window_ms: 5_000
+        )
+
+      assert [[count]] = result.rows
+      assert count <= 500
+      assert result.truncated
+      assert [note] = result.notes
+      assert note =~ "event limit"
+      assert note =~ "max_trace_events"
+    end
+
+    test "a process that is not running is reported, not traced" do
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_messages", trace: %{messages_to: "TraceTest.Nobody"})
+
+      assert result.rows == [[0]]
+      assert [note] = result.notes
+      assert note =~ "TraceTest.Nobody is not running on this node"
+    end
+  end
+
+  describe "calls" do
+    test "counts calls and running time per process and function" do
+      worker =
+        spawn(fn ->
+          loop = fn loop ->
+            Worker.busy(10_000)
+            loop.(loop)
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn -> Process.exit(worker, :kill) end)
+
+      {:ok, result} =
+        query("SELECT pid, function, calls, time_us FROM trace_calls",
+          trace: %{calls: "Porthole.TraceTest.Worker.busy/1"}
+        )
+
+      assert [[pid, "Porthole.TraceTest.Worker.busy/1", calls, time_us]] = result.rows
+      assert pid == Porthole.Remote.pid(worker)
+      assert calls > 0 and time_us > 0
+    end
+
+    test "refuses OTP and Elixir modules, and reports unknown ones" do
+      for module <- [":lists", "Enum", ":gen_server"] do
+        {:ok, result} = query("SELECT count(*) FROM trace_calls", trace: %{calls: module})
+        assert [note] = result.notes
+        assert note =~ "part of OTP or Elixir"
+      end
+
+      {:ok, result} = query("SELECT count(*) FROM trace_calls", trace: %{calls: "No.Such.Module"})
+      assert [note] = result.notes
+      assert note =~ "no module No.Such.Module is loaded"
+
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_calls",
+          trace: %{calls: "Porthole.TraceTest.Worker.nope/1"}
+        )
+
+      assert [note] = result.notes
+      assert note =~ "no such function"
+    end
+  end
+
+  describe "exits" do
+    test "reports why a supervisor's children exit: the exception class and where" do
+      children = [Supervisor.child_spec({Worker, 20}, id: :worker)]
+
+      start_supervised!(%{
+        id: :trace_test_sup,
+        start:
+          {Supervisor, :start_link,
+           [children, [strategy: :one_for_one, max_restarts: 1_000, name: :trace_test_sup]]},
+        type: :supervisor
+      })
+
+      {:ok, result} =
+        query(
+          "SELECT reason, location, count(*) FROM trace_exits WHERE reason <> 'normal' GROUP BY 1, 2",
+          trace: %{exits: "trace_test_sup"},
+          window_ms: 500
+        )
+
+      assert [["FunctionClauseError", "Porthole.TraceTest.Worker.parse/1", count]] = result.rows
+      # Restarted children are traced too.
+      assert count > 3
+      refute inspect(result) =~ "unexpected"
+    end
+  end
+
+  describe "validation" do
+    test "needs a window, the trace tier and a matching table" do
+      assert {:error, %Error{reason: :window_required}} =
+               Porthole.query("SELECT * FROM trace_messages", trace: %{messages_to: "x"})
+
+      assert {:error, %Error{reason: :bad_request, message: message}} =
+               query("SELECT * FROM trace_messages", [])
+
+      assert message =~ ~s(trace: {"messages_to")
+
+      assert {:error, %Error{reason: :bad_request, message: message}} =
+               query("SELECT * FROM trace_calls", trace: %{messages_to: "x"})
+
+      assert message =~ "trace_calls holds the results of a trace"
+
+      assert {:error, %Error{reason: :bad_request, message: message}} =
+               query("SELECT * FROM processes", trace: %{messages_to: "x"})
+
+      assert message =~ "query that table"
+
+      Application.put_env(:porthole, :policy, [])
+
+      assert {:error, %Error{reason: :not_allowed}} =
+               query("SELECT * FROM trace_messages", trace: %{messages_to: "x"})
+    end
+
+    test "rejects malformed traces" do
+      for trace <- [
+            %{},
+            %{"messages_to" => "x", "calls" => "y"},
+            %{"spy" => "x"},
+            %{"messages_to" => 1},
+            %{"messages_to" => "a b"},
+            %{"calls" => "Mod.fun"},
+            "messages_to",
+            [1, 2]
+          ] do
+        assert {:error, %Error{reason: :bad_request}} =
+                 query("SELECT * FROM trace_messages", trace: trace),
+               inspect(trace)
+      end
+    end
+  end
+end

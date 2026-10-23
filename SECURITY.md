@@ -31,6 +31,13 @@ from intended behavior. The full discussion is in
 - **Queries are bounded:** rows and bytes collected, rows returned, time,
   sampling windows, SQLite's memory, and the rate and concurrency of
   queries per client.
+- **Traces are bounded and leave nothing behind.** Tracing is off unless the
+  server enables it. A trace targets what the agent names (never a whole
+  module of OTP or Elixir), stops at an event limit counted as the VM
+  produces events, and runs in an OTP trace session the VM removes when the
+  trace ends for any reason. It keeps metadata only: a message's sender and
+  kind, an exit's reason class and location, never message contents,
+  arguments or state.
 - **The HTTP server authenticates every request** with a per-client bearer
   token (only its SHA-256 hash is stored, compared in constant time),
   rejects browser requests (`Origin`) and bodies over 1 MB, and refuses to

@@ -190,6 +190,22 @@ ORDER BY growth DESC
 LIMIT 10;
 ```
 
+**Ask who and why.** When a snapshot points at a process, a trace (if the
+server enables tracing) names the cause during a short window: who floods
+that mailbox, where that GenServer spends its time, why that supervisor's
+children exit:
+
+```sql
+-- window_ms: 5000
+-- trace: messages_to=Shop.Notifications
+SELECT coalesce(p.registered_name, p.initial_call) AS sender, t.tag, count(*) AS sent
+FROM trace_messages t
+LEFT JOIN processes p ON p.node = t.node AND p.pid = t.sender
+GROUP BY 1, 2
+ORDER BY sent DESC
+LIMIT 5;
+```
+
 **Hand off.** The agent reports what it found, with the queries as evidence,
 and proposes an action: restart this worker, drain that queue, roll back that
 deploy. A human takes the action. Porthole defines `mutate` and `evaluate`
@@ -199,9 +215,10 @@ capability tiers, but neither is enabled, by design.
 sample to confirm it is *growing*, not just *big* → attribute (`initial_call`,
 `application`, `supervisors`) → report with evidence → human acts.
 
-**Cannot see yet:** *why* a process crashed (that is in your logs and error
-tracker), what is inside a mailbox, process state, or anything that happened
-before the query ran (Porthole keeps no history).
+**Cannot see yet:** the data behind a crash (a trace gives the exception and
+where, the rest is in your logs and error tracker), what is inside a mailbox,
+process state, or anything that happened before the query ran (Porthole
+keeps no history).
 
 ## 4. Understanding a system you did not write
 
@@ -331,7 +348,9 @@ configuration.
 
 Being explicit about the gaps keeps agents from over-trusting the answers:
 
-- **Why** something crashed or restarted: read the logs or the error tracker.
+- **Why** something crashed, in full: a trace (`exits`) gives the exception
+  class and where it was raised, for crashes during the window; the
+  arguments and state are in the logs or the error tracker.
 - **What** is in a mailbox or in a process's state: that needs the `evaluate`
   tier, which is not enabled.
 - **Before now**: every query is a fresh snapshot, with no history. Use a

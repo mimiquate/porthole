@@ -1,5 +1,5 @@
 defmodule Porthole.MCPTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Porthole.MCP
 
@@ -59,6 +59,39 @@ defmodule Porthole.MCPTest do
   end
 
   def forward_audit(record, pid), do: send(pid, {:audit, record})
+
+  test "the trace argument reaches the query, and tracing is described only when enabled" do
+    assert %{result: %{tools: [%{description: description, inputSchema: schema}]}} =
+             call("tools/list")
+
+    refute description =~ "trace_messages"
+    assert schema.properties.trace.maxProperties == 1
+
+    assert %{isError: true, content: [%{text: "error (not_allowed)" <> _}]} =
+             query(%{
+               "sql" => "SELECT * FROM trace_messages",
+               "window_ms" => 50,
+               "trace" => %{"messages_to" => "porthole_mcp_test"}
+             })
+
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    assert %{result: %{tools: [%{description: description}]}} = call("tools/list")
+    assert description =~ "trace_messages"
+    assert description =~ "messages_to"
+
+    Process.register(self(), :porthole_mcp_test)
+
+    assert %{isError: false, content: [%{text: text}]} =
+             query(%{
+               "sql" => "SELECT count(*) FROM trace_messages",
+               "window_ms" => 50,
+               "trace" => %{"messages_to" => "porthole_mcp_test"}
+             })
+
+    assert %{"rows" => [[_count]]} = JSON.decode!(text)
+  end
 
   test "notifications and protocol errors" do
     assert MCP.handle(%{"jsonrpc" => "2.0", "method" => "notifications/initialized"}, @context) ==

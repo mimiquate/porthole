@@ -12,6 +12,11 @@ defmodule Porthole.CLI do
     * `--window MS` - sampling window.
     * `--all-supervisors` - find supervisors by scanning every process (see
       `Porthole.Query.run/2`).
+    * `--trace KIND=TARGET` - trace during the window (`Porthole.Trace`), e.g.
+      `--trace messages_to=Shop.Notifications`, `--trace calls=Shop.Pricing`
+      or `--trace exits=Shop.Payments.Supervisor`; implies `--allow-trace`.
+    * `--allow-trace` - let queries trace (agents through `mix porthole.mcp`
+      or `mix porthole.server`). Off by default.
     * `--demo` - start the demo app (a small shop with planted problems) first;
       from a checkout of Porthole, since the demo is not in the package
       (dev only, without `--connect`).
@@ -24,6 +29,8 @@ defmodule Porthole.CLI do
     all_nodes: :boolean,
     window: :integer,
     all_supervisors: :boolean,
+    trace: :string,
+    allow_trace: :boolean,
     demo: :boolean
   ]
 
@@ -45,7 +52,7 @@ defmodule Porthole.CLI do
       """)
     end
 
-    {opts, rest} = OptionParser.parse!(args, strict: @switches ++ extra)
+    {opts, rest} = OptionParser.parse!(args, strict: @switches ++ Keyword.delete(extra, :serves))
 
     target =
       if connect = opts[:connect] do
@@ -67,8 +74,29 @@ defmodule Porthole.CLI do
         true -> nil
       end
 
-    {[nodes: nodes, window_ms: opts[:window], all_supervisors: opts[:all_supervisors]], rest,
-     opts}
+    if opts[:trace] && Keyword.has_key?(extra, :serves) do
+      Mix.raise(
+        "--trace runs one trace, with mix porthole.query; to let agents trace, pass --allow-trace"
+      )
+    end
+
+    if opts[:trace] || opts[:allow_trace], do: Porthole.Policy.allow_tracing()
+
+    {[
+       nodes: nodes,
+       window_ms: opts[:window],
+       all_supervisors: opts[:all_supervisors],
+       trace: trace(opts[:trace])
+     ], rest, opts}
+  end
+
+  defp trace(nil), do: nil
+
+  defp trace(option) do
+    case String.split(option, "=", parts: 2) do
+      [kind, target] -> %{kind => target}
+      _ -> Mix.raise("--trace takes KIND=TARGET, e.g. --trace messages_to=Shop.Notifications")
+    end
   end
 
   defp connect!(target, cookie) do

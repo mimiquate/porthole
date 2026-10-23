@@ -65,6 +65,24 @@ defmodule Porthole.EvalTest do
     assert %{"initial_call" => "Shop.Notifications.init/1"} = top
   end
 
+  test "4b. who floods the stuck mailbox (tracing)" do
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    top =
+      first(
+        """
+        SELECT p.registered_name AS sender, t.tag, count(*) AS sent
+        FROM trace_messages t JOIN processes p ON p.node = t.node AND p.pid = t.sender
+        GROUP BY 1, 2 ORDER BY sent DESC LIMIT 1
+        """,
+        window_ms: 500,
+        trace: %{messages_to: "Shop.Notifications"}
+      )
+
+    assert %{"sender" => "Shop.Orders.EventRelay", "tag" => "order_event"} = top
+  end
+
   test "5. fastest-growing ETS tables over a window, and their owners" do
     top =
       first(

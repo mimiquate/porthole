@@ -332,3 +332,65 @@ FROM processes
 GROUP BY initial_call, node
 ORDER BY initial_call, node;
 ```
+
+## Tracing: who, where, why
+
+Snapshots show *what is*; a trace records *what happens* during the window.
+It needs the server to allow tracing (see
+[team setup](team-setup.md#tracing)), a `trace` argument with one key, and
+`window_ms`; the results land in a `trace_*` table. Queries marked
+`-- trace: kind=target` need that trace: `trace: {"messages_to":
+"Shop.Notifications"}` in the MCP tool, `--trace messages_to=Shop.Notifications`
+with `mix porthole.query`, or `trace: %{messages_to: "Shop.Notifications"}`
+with `Porthole.query/2`. Keep windows short: a few seconds is usually
+enough, and a trace stops at its event limit anyway (`notes` says when).
+
+Who floods a mailbox, and with what kind of message:
+
+```sql
+-- window_ms: 2000
+-- trace: messages_to=Shop.Notifications
+SELECT coalesce(p.registered_name, p.initial_call, t.sender) AS sender, t.tag, count(*) AS sent
+FROM trace_messages t
+LEFT JOIN processes p ON p.node = t.node AND p.pid = t.sender
+GROUP BY 1, 2
+ORDER BY sent DESC
+LIMIT 10;
+```
+
+Who calls a GenServer, and with which requests (`tag` is `call:<request>`
+or `cast:<request>` for GenServer messages):
+
+```sql
+-- window_ms: 2000
+-- trace: messages_to=Shop.Pricing
+SELECT t.tag, count(*) AS requests, count(DISTINCT t.sender) AS callers
+FROM trace_messages t
+GROUP BY t.tag
+ORDER BY requests DESC;
+```
+
+Where a module's time goes, function by function (time counts only while
+running, not waiting):
+
+```sql
+-- window_ms: 2000
+-- trace: calls=Shop.Pricing
+SELECT function, sum(calls) AS calls, sum(time_us) AS time_us,
+       sum(time_us) / sum(calls) AS us_per_call
+FROM trace_calls
+GROUP BY function
+ORDER BY time_us DESC;
+```
+
+Why a supervisor's children keep exiting (restarted children are traced
+too; `reason` is the class, never the data):
+
+```sql
+-- window_ms: 2000
+-- trace: exits=Shop.Payments.Supervisor
+SELECT reason, location, count(*) AS exits
+FROM trace_exits
+GROUP BY reason, location
+ORDER BY exits DESC;
+```

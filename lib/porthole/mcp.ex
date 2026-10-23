@@ -103,7 +103,8 @@ defmodule Porthole.MCP do
       for {key, value} <- [
             window_ms: args["window_ms"],
             only_nodes: args["nodes"],
-            all_supervisors: args["all_supervisors"]
+            all_supervisors: args["all_supervisors"],
+            trace: args["trace"]
           ],
           value != nil,
           do: {key, value}
@@ -153,6 +154,32 @@ defmodule Porthole.MCP do
               "supervisors table: scan every process instead of the applications' " <>
                 "supervision trees, to also find supervisors outside them. Slow on large " <>
                 "or overloaded nodes. Default false."
+          },
+          trace: %{
+            type: "object",
+            description:
+              "Trace during window_ms (required) and query the results in a trace_* table. " <>
+                "One key: messages_to, calls or exits. Only if the server enables tracing.",
+            properties: %{
+              messages_to: %{
+                type: "string",
+                description: "Registered name or pid: who sends to it (trace_messages)."
+              },
+              calls: %{
+                type: "string",
+                description:
+                  "Module or Module.function/arity of the application: calls and time " <>
+                    "per process (trace_calls)."
+              },
+              exits: %{
+                type: "string",
+                description:
+                  "Registered name or pid, e.g. a supervisor: exits of it and of the " <>
+                    "processes it starts, with reasons (trace_exits)."
+              }
+            },
+            minProperties: 1,
+            maxProperties: 1
           }
         },
         required: ["sql"]
@@ -162,25 +189,44 @@ defmodule Porthole.MCP do
   end
 
   defp description do
-    tables =
-      for table <- Porthole.schema() do
-        columns = Enum.map_join(table.columns, "\n", &"    #{&1.name} (#{&1.type}): #{&1.doc}")
-
-        sampled =
-          if table.sampled == [],
-            do: "",
-            else: "\n  with window_ms: #{Enum.join(table.sampled, ", ")}"
-
-        "- #{table.name}: #{table.description}\n    node (text)\n#{columns}#{sampled}"
-      end
-
     """
     Read-only SQL (SQLite) over the live Erlang/Elixir system. Tables are collected fresh for every \
     query; this is not an atomic snapshot. Every table has a `node` column: join on it as well as on pids. \
     Booleans are 0/1, memory is in bytes. Results are capped: if `truncated` is true, read `notes`. \
     If `errors` is not empty, rows from those nodes are missing from the result.
 
-    #{Enum.join(tables, "\n")}
+    #{Enum.map_join(Porthole.schema(), "\n", &table_description/1)}
+    #{tracing()}\
     """
+  end
+
+  # Described only where the server lets queries trace.
+  defp tracing do
+    if :trace in Porthole.Policy.environment().tiers do
+      """
+
+      Tracing: pass `trace` (one key) with window_ms to record what happens during the window, \
+      and query the matching table (join pids with processes, collected at the end of the window). \
+      Use it after a snapshot points at a process or module: who floods a mailbox (messages_to), \
+      where a process spends its time (calls), why processes crash (exits). A trace stops early \
+      at its event limit (see notes). messages_to makes every message sent on the node slightly \
+      slower while it runs: keep windows short (a few seconds).
+
+      #{Enum.map_join(Porthole.schema(:traces), "\n", &table_description/1)}
+      """
+    else
+      ""
+    end
+  end
+
+  defp table_description(table) do
+    columns = Enum.map_join(table.columns, "\n", &"    #{&1.name} (#{&1.type}): #{&1.doc}")
+
+    sampled =
+      if table.sampled == [],
+        do: "",
+        else: "\n  with window_ms: #{Enum.join(table.sampled, ", ")}"
+
+    "- #{table.name}: #{table.description}\n    node (text)\n#{columns}#{sampled}"
   end
 end

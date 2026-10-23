@@ -18,6 +18,7 @@ defmodule PortholeSidecar.Config do
   | `PORTHOLE_PORT` / `PORTHOLE_BIND` | Where to listen | `4040` / `0.0.0.0` |
   | `PORTHOLE_CERTFILE`, `PORTHOLE_KEYFILE` | Serve HTTPS | |
   | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
+  | `PORTHOLE_TRACE` | `true` lets queries trace (`Porthole.Trace`); tokens can still be denied it in their policy | off |
 
   At least one of `DNS_CLUSTER_QUERY`, `PORTHOLE_DISCOVERY` or
   `PORTHOLE_NODES` is required. The sidecar's own name and cookie come from
@@ -54,6 +55,7 @@ defmodule PortholeSidecar.Config do
   @spec from_env!(%{String.t() => String.t()}) :: t()
   def from_env!(env \\ System.get_env()) do
     file_config = load_file(env["PORTHOLE_CONFIG"])
+    if env["PORTHOLE_TRACE"] in ["true", "1"], do: Porthole.Policy.allow_tracing()
 
     {nodes, hosts} =
       env |> Map.get("PORTHOLE_NODES", "") |> split() |> Enum.split_with(&(&1 =~ "@"))

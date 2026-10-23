@@ -2,12 +2,12 @@ defmodule Porthole.Policy do
   @moduledoc """
   What an agent may see, and how much it may ask for.
 
-  Every capability tier is defined, but only `:observe` is implemented:
+  Every capability tier is defined; `:observe` and `:trace` are implemented:
 
   | Tier        | Examples                                  |
   |-------------|-------------------------------------------|
   | `:observe`  | table queries, sampled stats              |
-  | `:trace`    | budgeted trace sessions                   |
+  | `:trace`    | budgeted trace sessions (`Porthole.Trace`) |
   | `:evaluate` | code eval, `:sys.get_state`               |
   | `:mutate`   | kill, `:sys.replace_state`, hot code load |
 
@@ -15,6 +15,9 @@ defmodule Porthole.Policy do
   is `environment ∩ session ∩ request`: tiers and nodes are intersected,
   limits take the minimum. The environment policy comes from
   `config :porthole, :policy, [...]`.
+
+  The environment allows only `:observe` by default: enable tracing with
+  `config :porthole, :policy, tiers: [:observe, :trace]`.
   """
 
   alias Porthole.Error
@@ -38,6 +41,8 @@ defmodule Porthole.Policy do
     identified clients, such as agents connected through MCP).
   * `:max_concurrent` - queries that may run at the same time on the
     querying node, across all clients.
+  * `:max_trace_events` - events a trace may produce on each node before it
+    is stopped (counted as the VM produces them).
 
   Limits are `:infinity` in a policy that does not set them (see `new/1`);
   every query intersects with the environment policy, which sets them all.
@@ -52,7 +57,8 @@ defmodule Porthole.Policy do
           max_window_ms: limit(),
           timeout_ms: limit(),
           queries_per_minute: limit(),
-          max_concurrent: limit()
+          max_concurrent: limit(),
+          max_trace_events: limit()
         }
 
   defstruct tiers: [:observe],
@@ -63,7 +69,8 @@ defmodule Porthole.Policy do
             max_window_ms: 60_000,
             timeout_ms: 10_000,
             queries_per_minute: 60,
-            max_concurrent: 4
+            max_concurrent: 4,
+            max_trace_events: 10_000
 
   @limits [
     :max_rows,
@@ -72,7 +79,8 @@ defmodule Porthole.Policy do
     :max_window_ms,
     :timeout_ms,
     :queries_per_minute,
-    :max_concurrent
+    :max_concurrent,
+    :max_trace_events
   ]
 
   @doc "All tiers, least to most powerful."
@@ -125,16 +133,41 @@ defmodule Porthole.Policy do
     )
   end
 
+  @doc """
+  Lets queries trace: adds `:trace` to the environment policy's tiers (for
+  servers configured by flags or environment variables rather than
+  `config :porthole, :policy`).
+  """
+  @spec allow_tracing() :: :ok
+  def allow_tracing do
+    policy = Application.get_env(:porthole, :policy, [])
+    tiers = Keyword.get(policy, :tiers, [:observe])
+
+    Application.put_env(
+      :porthole,
+      :policy,
+      Keyword.put(policy, :tiers, Enum.uniq(tiers ++ [:trace]))
+    )
+  end
+
   @doc "Checks that the policy allows `tier` and that it is implemented."
   @spec authorize(t(), tier()) :: :ok | {:error, Error.t()}
   def authorize(%__MODULE__{tiers: tiers}, tier) do
     cond do
       tier not in tiers ->
-        {:error, Error.new(:not_allowed, "the #{tier} tier is not allowed by the policy")}
-
-      tier != :observe ->
         {:error,
-         Error.new(:not_enabled, "the #{tier} tier is not enabled; only observe is available")}
+         Error.new(
+           :not_allowed,
+           "the #{tier} tier is not allowed by the policy" <>
+             if(tier == :trace, do: " (tracing is off unless the server enables it)", else: "")
+         )}
+
+      tier not in [:observe, :trace] ->
+        {:error,
+         Error.new(
+           :not_enabled,
+           "the #{tier} tier is not enabled; only observe and trace are available"
+         )}
 
       true ->
         :ok

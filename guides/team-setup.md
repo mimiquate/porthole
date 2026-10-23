@@ -299,6 +299,7 @@ All variables:
 | `PORTHOLE_PORT` / `PORTHOLE_BIND` | Where to listen | `4040` / `0.0.0.0` |
 | `PORTHOLE_CERTFILE` / `PORTHOLE_KEYFILE` | Serve HTTPS | |
 | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
+| `PORTHOLE_TRACE` | `true` lets agents trace (see [tracing](#tracing)) | off |
 | `RELEASE_NODE` / `RELEASE_DISTRIBUTION` | Override the sidecar's own name / name type | `porthole@<IP>` / `name` |
 
 The sidecar refuses to start without tokens or a place to look, and it logs
@@ -414,6 +415,7 @@ policy and every request is intersected with it, so they can only narrow:
 
 ```elixir
 config :porthole, :policy,
+  tiers: [:observe],         # add :trace to let agents trace (see below)
   nodes: [:"my_app@10.0.1.12", :"my_app@10.0.1.13"],
   # What one query may collect and return.
   max_rows: 50_000,          # rows per table, per node
@@ -423,7 +425,8 @@ config :porthole, :policy,
   timeout_ms: 10_000,        # collection deadline (enforced on each node) and SQL time
   # How much load agents may put on the cluster.
   queries_per_minute: 60,    # per client (token)
-  max_concurrent: 4          # queries running at once, across all clients
+  max_concurrent: 4,         # queries running at once, across all clients
+  max_trace_events: 10_000   # events one trace may produce per node
 ```
 
 The values above are the defaults. A token's `policy:` can lower any of them
@@ -442,9 +445,82 @@ When a limit is hit, the query is not silently degraded:
   `busy` (*"4 queries are already running on this node; retry in a few
   seconds"*). Rejected queries do not count toward the rate.
 
-Only the `observe` tier is implemented. The `trace`, `evaluate` and `mutate`
-tiers are defined so policies can be written against them, and they return a
-"not enabled" error.
+The `observe` and `trace` tiers are implemented. `evaluate` and `mutate` are
+defined so policies can be written against them, and they return a "not
+enabled" error.
+
+### Tracing
+
+Snapshots tell an agent *what is*: a mailbox holds 40,000 messages, a
+GenServer is busy, a supervisor restarts a child. A trace records *what
+happens* during the window, to answer *who* and *why*: who sends to that
+mailbox, where that GenServer spends its time, why the child exits. The
+agent passes a `trace` argument with `window_ms` and queries the matching
+table (see the [cookbook](cookbook.md#tracing-who-where-why)):
+
+| `trace` | Table | What it records |
+|---|---|---|
+| `{"messages_to": "<name or pid>"}` | `trace_messages` | Each message sent to that process: sender, kind (`tag`), time |
+| `{"calls": "<Module or Module.fun/arity>"}` | `trace_calls` | Calls and running time per process and function (counters) |
+| `{"exits": "<name or pid>"}` | `trace_exits` | Exits of that process and of every process it starts: reason class, where |
+
+**Tracing is off by default.** Enable it on the server with
+`tiers: [:observe, :trace]` in the environment policy, `PORTHOLE_TRACE=true`
+for the sidecar image, `--trace` with `mix porthole.fly.up` and `k8s.up`, or
+`--allow-trace` with `mix porthole.mcp` and `mix porthole.server`. A token's
+policy can still leave it out (`policy: [tiers: [:observe]]`).
+
+What a trace keeps, and what it doesn't:
+
+- **Metadata only.** `trace_messages` keeps the sender, the time and the
+  message's *tag* (its first element when it is an atom, a struct's name,
+  or `call:<tag>` / `cast:<tag>` for GenServer requests), never the rest of
+  the message. `trace_exits` keeps the reason's *class* (`FunctionClauseError`,
+  `badarg`, `shutdown`) and where it was raised, never the arguments or state
+  that crash reasons often carry. The rest is dropped on your node.
+- **Only the application's code.** `calls` refuses modules of OTP and Elixir
+  themselves (`:lists`, `Enum`, `:gen_server`): tracing them would slow down
+  everything on the node.
+- **Not every message.** `messages_to` sees messages sent from the same node,
+  not those arriving from other nodes.
+
+The agent's tool description explains all this when tracing is enabled, and
+the audit log records each trace's target.
+
+#### How a trace is bounded
+
+A trace runs in its own OTP trace session (OTP 27+), next to any tracing your
+team already does with `dbg` or `recon`, without disturbing it. The session
+belongs to a process on your node, and the VM removes the session and every
+trace setting it made as soon as that process ends, whatever the reason.
+It ends at the end of the window, when the query is abandoned, or when the
+connection to the sidecar drops; it also stops itself:
+
+- **at the event limit** (`max_trace_events`, 10,000 by default per node),
+  counted as the VM *produces* events, not as they are read: on every event,
+  and by a watchdog process that checks every millisecond. Past the limit,
+  the result is a sample of the first part of the window, and `notes` says
+  how long it covers;
+- **past a memory cap**: the VM itself stops a trace that holds too much;
+- **within the deadline**: on a busy node the trace (at low priority, like
+  all collection) reads its events slowly; what it has not read when its time
+  is up is left out, and `notes` says so, instead of the query failing.
+
+#### What tracing costs
+
+Measured on a laptop (OTP 29, 8 schedulers), on a node without Porthole:
+
+| While a trace runs | Cost |
+|---|---|
+| `calls`: each call to a traced function | +88 ns of running time (~2× on a trivial function; little on real work); call counts alone are free |
+| `calls`: other functions | nothing measurable |
+| `messages_to`: every message sent on the node | +~70 ns (the VM checks whether it is for the target) |
+| `messages_to` / `exits`: each recorded event | a copy to the tracing process, read at low priority |
+| A flood (8 processes sending as fast as they can) | stopped at 10,000 events after ~20–50 ms; ~2 MB held while tracing |
+
+Nothing stays behind: we checked that the session is gone after a normal
+end, a killed query and a dropped connection. Keep windows short; a few
+seconds answers most questions.
 
 ### Audit
 

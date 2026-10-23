@@ -1,5 +1,26 @@
 # Changelog
 
+## Unreleased
+
+- **Tracing.** A query can record what happens during its window, to answer
+  *who* and *why* where snapshots only show *what*: pass `trace` (MCP tool),
+  `--trace` (`mix porthole.query`) or `:trace` (`Porthole.query/2`) with a
+  window, and query the matching table:
+  - `messages_to` → `trace_messages`: who sends to a process, and what kind of
+    message (its tag, never its contents);
+  - `calls` → `trace_calls`: calls and running time per process and function
+    of an application module (VM counters, no events);
+  - `exits` → `trace_exits`: exits of a process and of every process it
+    starts, with the reason's class and where it was raised (never its data).
+
+  Off by default: enable it with `tiers: [:observe, :trace]`,
+  `PORTHOLE_TRACE=true` (sidecar), `--trace` (`fly.up`, `k8s.up`) or
+  `--allow-trace` (`mcp`, `server`). Each trace runs in an OTP trace session
+  that the VM removes when it ends (including when the query is abandoned or
+  the connection drops), stops at `max_trace_events` (10,000 per node, new
+  policy limit) counted as events are produced, and on a busy node returns
+  the events it could read with a note instead of timing out.
+
 ## 0.1.1 - 2026-10-07
 
 - `fly.up` / `k8s.up` reopen the temporary tunnel they check the sidecar

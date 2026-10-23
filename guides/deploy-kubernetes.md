@@ -103,6 +103,7 @@ every deploy: run `up` again after deploying your app.
 | `--container` | The container running the release, when the pod has several |
 | `--name` | The sidecar's name (default: `<deployment>-porthole`) |
 | `--image` | The sidecar image (default: `ghcr.io/mimiquate/porthole-sidecar:latest`) |
+| `--trace` | Let the agent trace (see [tracing](team-setup.md#tracing)); off by default |
 
 **Permissions.** `up` checks first that you may create Deployments,
 Secrets and Services, exec into pods and port-forward in the namespace, and

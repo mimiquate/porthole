@@ -63,6 +63,11 @@ $ mix porthole.fly.down my-app
 $ claude mcp remove my-app-porthole
 ```
 
+To let the agent trace too (who sends to a process, where time goes, why
+processes exit; see [tracing](team-setup.md#tracing)), add `--trace`:
+`mix porthole.fly.up my-app --trace`. Running `up` again without it turns
+tracing off.
+
 `down` asks you to type the sidecar's name, then destroys it with its
 secrets and tokens. Run `claude mcp remove` from the folder where you added
 the server. `up` marks the sidecars it creates, and both commands only act
