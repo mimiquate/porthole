@@ -481,8 +481,9 @@ What a trace keeps, and what it doesn't:
   that crash reasons often carry. The rest is dropped on your node.
 - **Who each process was.** Senders and exiting processes are identified on
   your node while the trace runs (registered name and initial call, as in
-  `processes`), so short-lived ones are named even though they are gone by
-  the time the agent reads the result.
+  `processes`, and who started them: the process a task works for, or its
+  parent), so short-lived ones are named even though they are gone by the
+  time the agent reads the result.
 - **Only the application's code.** `calls` refuses modules of OTP and Elixir
   themselves (`:lists`, `Enum`, `:gen_server`): tracing them would slow down
   everything on the node.
@@ -531,6 +532,8 @@ Measured on a laptop (OTP 29, 8 schedulers), on a node without Porthole:
 | `calls`: each call to a traced function | +88 ns of running time (~2× on a trivial function; little on real work); call counts alone are free |
 | `calls`: other functions | nothing measurable |
 | `messages_to`: every message sent on the node | +~70 ns (the VM checks whether it is for the target) |
+| `messages_to` / `calls`: setting up | every process is flagged one at a time at low priority before the window starts (~0.2–0.35 s at 100k processes), without pausing the node; flagging them in one call paused other processes ~17 ms at 100k |
+| Any trace: when it ends | the VM's `erts_trace_cleaner` removes the session's settings from every process: ~7 reductions per process (~650k at 100k processes), with no measurable pause |
 | `messages_to` / `exits`: each recorded event | a copy to the tracing process, read at low priority |
 | A flood (8 processes sending as fast as they can) | stopped at 10,000 events after ~20–50 ms; ~2 MB held while tracing |
 

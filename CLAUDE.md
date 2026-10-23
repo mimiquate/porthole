@@ -88,6 +88,18 @@ when a real question needs it.
     `messages_to` cannot see timer messages (the VM sends them) nor `GenServer.call`
     replies (sent to an alias, not the pid), and `time_us` was read as latency; both are
     now spelled out in the column docs the agent sees.
+  - Second real use (2026-10-23): tasks (Ecto preloads, `Task.async`) showed as
+    `:erlang.apply/2`, so rows also say who started each process: the first of `$callers`
+    (who a task works for) or of `$ancestors`, or for an exit the spawn event's parent.
+    A sender that exits the instant it sends cannot be asked anything (NULL).
+  - Cost at 100k processes (2026-10-23, laptop, a probe recording its longest scheduling
+    gap): `trace:process(S, all, ...)` paused other processes 16–19 ms (it flags every
+    process in one blocking step; ~170 ms expected at 1M), so `messages_to` and `calls` set
+    `new_processes` in one call and flag existing processes one at a time from the
+    low-priority tracer (try/catch: they may exit meanwhile): pauses back to noise (~1–3 ms),
+    setup 0.2–0.35 s, and the window now starts after setup. Ending any session makes
+    `erts_trace_cleaner` (a VM process) walk every process: ~650k reductions at 100k, with
+    no measurable pause (`exits`, which flags few processes, costs the same cleanup).
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox

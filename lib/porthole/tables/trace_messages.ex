@@ -35,7 +35,12 @@ defmodule Porthole.Tables.TraceMessages do
        "Its registered name, identified on the node during the trace, so known even if it " <>
          "has exited since; NULL if none, or if it exited before it could be identified."},
       {:sender_initial_call, :text,
-       "Its initial call (Mod.init/1 for a GenServer), identified the same way."},
+       "Its initial call (Mod.init/1 for a GenServer), identified the same way. Tasks " <>
+         "and plain spawns show :erlang.apply/2: see sender_started_by."},
+      {:sender_started_by, :text,
+       "Who started it: the process a task works for (e.g. the LiveView behind a preload " <>
+         "task), or else its parent; a name or an initial call. NULL, like the other " <>
+         "sender_ columns, for a sender that exited right after sending."},
       {:receiver, :text, "Pid of the traced process."},
       {:tag, :text,
        "Kind of message: its first element (order_event), a struct's name, or call:<tag> / " <>
@@ -61,12 +66,13 @@ defmodule Porthole.Tables.TraceMessages do
   def shape(raw) do
     rows =
       for {sender, receiver, tag, at_ms, identity} <- Map.get(raw, :rows, []) do
-        {name, initial_call} = Porthole.Trace.identity(identity)
+        {name, initial_call, started_by} = Porthole.Trace.identity(identity)
 
         %{
           sender: Remote.pid(sender),
           sender_name: name,
           sender_initial_call: initial_call,
+          sender_started_by: started_by,
           receiver: Remote.pid(receiver),
           tag: tag(tag),
           at_ms: at_ms

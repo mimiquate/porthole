@@ -147,9 +147,9 @@ server enables it; see [tracing](guides/team-setup.md#tracing)):
 
 | Table | One row per | Columns |
 |-------|-------------|---------|
-| `trace_messages` | message sent to a process (`messages_to`) | sender (with its name and initial call), receiver, tag (what kind of message), at_ms |
+| `trace_messages` | message sent to a process (`messages_to`) | sender (with its name, initial call and who started it), receiver, tag (what kind of message), at_ms |
 | `trace_calls` | process and function called (`calls`) | pid, function, calls, time_us |
-| `trace_exits` | exit of a process or of what it started (`exits`) | pid, name, initial_call, reason (class), location, at_ms |
+| `trace_exits` | exit of a process or of what it started (`exits`) | pid, name, initial_call, started_by, reason (class), location, at_ms |
 
 Every table has a `node` column. With a window, `processes` gains
 `reductions_delta`, `memory_delta`, `message_queue_len_delta` and

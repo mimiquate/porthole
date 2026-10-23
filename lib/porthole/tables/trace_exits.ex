@@ -51,7 +51,11 @@ defmodule Porthole.Tables.TraceExits do
       {:name, :text, "Its registered name, if it had one."},
       {:initial_call, :text,
        "Its initial call (Mod.init/1 for a GenServer, the function a task ran), identified " <>
-         "when the trace started or when it was spawned; NULL if unknown."},
+         "when the trace started or when it was spawned; NULL if unknown. Tasks and plain " <>
+         "spawns may show :erlang.apply/2: see started_by."},
+      {:started_by, :text,
+       "Who started it: the process a task works for (e.g. the LiveView behind a preload " <>
+         "task), or else the process that spawned it; a name or an initial call."},
       {:reason, :text,
        "Class of the exit reason: normal, shutdown, killed, an exception (FunctionClauseError, " <>
          "MatchError) or another error atom (timeout, noproc). Never the reason's data."},
@@ -67,12 +71,13 @@ defmodule Porthole.Tables.TraceExits do
   def shape(raw) do
     rows =
       for {pid, reason, location, at_ms, identity} <- Map.get(raw, :rows, []) do
-        {name, initial_call} = Porthole.Trace.identity(identity)
+        {name, initial_call, started_by} = Porthole.Trace.identity(identity)
 
         %{
           pid: Remote.pid(pid),
           name: name,
           initial_call: initial_call,
+          started_by: started_by,
           reason: Term.name(Map.get(@exceptions, reason, reason)),
           location: Term.mfa(location),
           at_ms: at_ms

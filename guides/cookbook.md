@@ -348,14 +348,16 @@ anyway (`notes` says when).
 
 Who floods a mailbox, and with what kind of message. Senders are identified
 on the node while the trace runs, so short-lived ones are named even after
-they exit (join `processes` on `sender` for more about live ones):
+they exit; `sender_started_by` names who started a task (join `processes`
+on `sender` for more about live ones):
 
 ```sql
 -- window_ms: 2000
 -- trace: messages_to=Shop.Notifications
-SELECT coalesce(sender_name, sender_initial_call, sender) AS sender, tag, count(*) AS sent
+SELECT coalesce(sender_name, sender_initial_call, sender) AS sender, sender_started_by,
+       tag, count(*) AS sent
 FROM trace_messages
-GROUP BY 1, 2
+GROUP BY 1, 2, 3
 ORDER BY sent DESC
 LIMIT 10;
 ```

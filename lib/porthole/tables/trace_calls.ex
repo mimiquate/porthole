@@ -34,7 +34,9 @@ defmodule Porthole.Tables.TraceCalls do
       {:time_us, :integer,
        "CPU time running the function's own code, in µs. Not latency: waiting (receive, " <>
          "I/O, a GenServer.call, a database query) counts ~0, so a call that waits 200 ms " <>
-         "for the database shows a few µs. Time in other traced functions is excluded."}
+         "for the database shows a few µs: for code that queries a database, it is the " <>
+         "time to build the query and decode the result, not the query. Time in other " <>
+         "traced functions is excluded."}
     ]
   end
 

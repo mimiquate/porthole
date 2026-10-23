@@ -23,10 +23,14 @@
   events it could read with a note instead of timing out.
 - A note that only informs (a trace found nothing to trace on a node) no
   longer marks the result `truncated`.
-- Trace rows say who each process was (`sender_name` and
-  `sender_initial_call`, `name` and `initial_call` on exits), identified on
-  the node while the trace runs, so short-lived processes are named after
-  they exit.
+- Trace rows say who each process was (`sender_name`,
+  `sender_initial_call` and `sender_started_by`; `name`, `initial_call` and
+  `started_by` on exits), identified on the node while the trace runs, so
+  short-lived processes, and the tasks a LiveView or job starts, are named
+  after they exit.
+- Setting up a trace no longer pauses the node: processes are flagged one at
+  a time at low priority, before the window starts (flagging them in one call
+  paused other processes ~17 ms at 100k processes).
 
 ## 0.1.1 - 2026-10-07
 

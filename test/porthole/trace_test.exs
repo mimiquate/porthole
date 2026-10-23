@@ -164,6 +164,47 @@ defmodule Porthole.TraceTest do
       assert once_call =~ "Porthole.TraceTest"
     end
 
+    test "says who started a task that sends, and who started an exited one" do
+      start_supervised!({Inbox, :trace_test_task_inbox})
+
+      # A named process that keeps starting tasks, as a LiveView preloading.
+      owner =
+        spawn(fn ->
+          Process.register(self(), :trace_test_owner)
+
+          loop = fn loop ->
+            # A task that lives a little (a query), like real ones: one that
+            # exits the instant it sends is gone before it can be asked.
+            Task.async(fn ->
+              send(:trace_test_task_inbox, :from_task)
+              Process.sleep(20)
+            end)
+            |> Task.await()
+
+            Process.sleep(5)
+            loop.(loop)
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn -> Process.exit(owner, :kill) end)
+
+      {:ok, result} =
+        query("SELECT DISTINCT sender_started_by FROM trace_messages WHERE tag = 'from_task'",
+          trace: %{messages_to: "trace_test_task_inbox"}
+        )
+
+      assert result.rows == [["trace_test_owner"]]
+
+      {:ok, result} =
+        query("SELECT DISTINCT started_by FROM trace_exits",
+          trace: %{exits: "trace_test_owner"}
+        )
+
+      assert result.rows == [["trace_test_owner"]]
+    end
+
     test "stops at the event limit, and says so" do
       start_supervised!({Inbox, :trace_test_flood})
       for _ <- 1..4, do: sender(:trace_test_flood, :tick, 0)
