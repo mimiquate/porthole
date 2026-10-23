@@ -15,9 +15,11 @@ defmodule Porthole.Tables.TraceMessages do
   @impl true
   def description,
     do:
-      ~s(With trace {"messages_to": "<name or pid>"}: one row per message sent to that ) <>
-        "process during the window. Answers who floods a mailbox. Only messages sent from " <>
-        "the same node are seen."
+      ~s(With trace {"messages_to": "<name or pid>"}: one row per message another process ) <>
+        "(or the process itself) sent to it during the window. Answers who floods a " <>
+        "mailbox. Not seen, so no rows does not mean no messages: timer messages " <>
+        "(Process.send_after, :timer), replies to the process's own calls (GenServer.call " <>
+        "replies are sent to an alias, not the pid) and messages from other nodes."
 
   @impl true
   def key, do: :sender
@@ -29,6 +31,11 @@ defmodule Porthole.Tables.TraceMessages do
   def columns do
     [
       {:sender, :text, "Pid of the sending process (join processes.pid)."},
+      {:sender_name, :text,
+       "Its registered name, identified on the node during the trace, so known even if it " <>
+         "has exited since; NULL if none, or if it exited before it could be identified."},
+      {:sender_initial_call, :text,
+       "Its initial call (Mod.init/1 for a GenServer), identified the same way."},
       {:receiver, :text, "Pid of the traced process."},
       {:tag, :text,
        "Kind of message: its first element (order_event), a struct's name, or call:<tag> / " <>
@@ -53,8 +60,17 @@ defmodule Porthole.Tables.TraceMessages do
   @impl true
   def shape(raw) do
     rows =
-      for {sender, receiver, tag, at_ms} <- Map.get(raw, :rows, []) do
-        %{sender: Remote.pid(sender), receiver: Remote.pid(receiver), tag: tag(tag), at_ms: at_ms}
+      for {sender, receiver, tag, at_ms, identity} <- Map.get(raw, :rows, []) do
+        {name, initial_call} = Porthole.Trace.identity(identity)
+
+        %{
+          sender: Remote.pid(sender),
+          sender_name: name,
+          sender_initial_call: initial_call,
+          receiver: Remote.pid(receiver),
+          tag: tag(tag),
+          at_ms: at_ms
+        }
       end
 
     {rows, {:trace, Map.delete(raw, :rows)}}

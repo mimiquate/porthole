@@ -198,9 +198,8 @@ children exit:
 ```sql
 -- window_ms: 5000
 -- trace: messages_to=Shop.Notifications
-SELECT coalesce(p.registered_name, p.initial_call) AS sender, t.tag, count(*) AS sent
-FROM trace_messages t
-LEFT JOIN processes p ON p.node = t.node AND p.pid = t.sender
+SELECT coalesce(sender_name, sender_initial_call) AS sender, tag, count(*) AS sent
+FROM trace_messages
 GROUP BY 1, 2
 ORDER BY sent DESC
 LIMIT 5;

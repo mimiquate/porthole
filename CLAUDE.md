@@ -79,6 +79,15 @@ when a real question needs it.
     review, 2026-10-23; the evaluated tracer reads only ~20k events/s on a quiet laptop, and
     a backlog of ~200k events reaches the heap cap, losing the results; the default 10k
     limit keeps the backlog small).
+  - First real use (ex-tools, 2026-10-23): agents could not say what short-lived senders or
+    exited processes were (gone before they could look them up), so the tracer identifies
+    them on the node (registered name, `$initial_call` or initial call), cached per pid:
+    senders when their first event is read; for `exits`, the subtree at the start and each
+    child at its `spawn` event, falling back to the spawn MFA (`gen:init_it` args give the
+    callback module) when it is already gone. Two overreaches also came from the docs:
+    `messages_to` cannot see timer messages (the VM sends them) nor `GenServer.call`
+    replies (sent to an alias, not the pid), and `time_us` was read as latency; both are
+    now spelled out in the column docs the agent sees.
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox

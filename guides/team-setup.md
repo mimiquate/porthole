@@ -479,11 +479,21 @@ What a trace keeps, and what it doesn't:
   the message. `trace_exits` keeps the reason's *class* (`FunctionClauseError`,
   `badarg`, `shutdown`) and where it was raised, never the arguments or state
   that crash reasons often carry. The rest is dropped on your node.
+- **Who each process was.** Senders and exiting processes are identified on
+  your node while the trace runs (registered name and initial call, as in
+  `processes`), so short-lived ones are named even though they are gone by
+  the time the agent reads the result.
 - **Only the application's code.** `calls` refuses modules of OTP and Elixir
   themselves (`:lists`, `Enum`, `:gen_server`): tracing them would slow down
   everything on the node.
-- **Not every message.** `messages_to` sees messages sent from the same node,
-  not those arriving from other nodes.
+- **Not every message.** `messages_to` sees messages sent by processes of the
+  same node. It does not see timer messages (`Process.send_after`, `:timer`,
+  which the VM delivers), replies to the process's own calls (a
+  `GenServer.call` reply goes to an alias, not to the pid), or messages from
+  other nodes. A process driven by timers can show no rows while it is busy.
+- **CPU time, not latency.** `trace_calls.time_us` counts time spent
+  running a function, not waiting: a function that waits 200 ms on the
+  database shows a few microseconds.
 
 The agent's tool description explains all this when tracing is enabled, and
 the audit log records each trace's target.

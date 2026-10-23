@@ -23,6 +23,10 @@
   events it could read with a note instead of timing out.
 - A note that only informs (a trace found nothing to trace on a node) no
   longer marks the result `truncated`.
+- Trace rows say who each process was (`sender_name` and
+  `sender_initial_call`, `name` and `initial_call` on exits), identified on
+  the node while the trace runs, so short-lived processes are named after
+  they exit.
 
 ## 0.1.1 - 2026-10-07
 

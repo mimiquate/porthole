@@ -346,14 +346,15 @@ with `Porthole.query/2`. Keep windows short: a few seconds is usually
 enough (at most 10 s by default), and a trace stops at its event limit
 anyway (`notes` says when).
 
-Who floods a mailbox, and with what kind of message:
+Who floods a mailbox, and with what kind of message. Senders are identified
+on the node while the trace runs, so short-lived ones are named even after
+they exit (join `processes` on `sender` for more about live ones):
 
 ```sql
 -- window_ms: 2000
 -- trace: messages_to=Shop.Notifications
-SELECT coalesce(p.registered_name, p.initial_call, t.sender) AS sender, t.tag, count(*) AS sent
-FROM trace_messages t
-LEFT JOIN processes p ON p.node = t.node AND p.pid = t.sender
+SELECT coalesce(sender_name, sender_initial_call, sender) AS sender, tag, count(*) AS sent
+FROM trace_messages
 GROUP BY 1, 2
 ORDER BY sent DESC
 LIMIT 10;
@@ -385,13 +386,14 @@ ORDER BY time_us DESC;
 ```
 
 Why a supervisor's children keep exiting (restarted children are traced
-too; `reason` is the class, never the data):
+too; `reason` is the class, never the data; `initial_call` says which child
+it was, although it is gone):
 
 ```sql
 -- window_ms: 2000
 -- trace: exits=Shop.Payments.Supervisor
-SELECT reason, location, count(*) AS exits
+SELECT initial_call, reason, location, count(*) AS exits
 FROM trace_exits
-GROUP BY reason, location
+GROUP BY initial_call, reason, location
 ORDER BY exits DESC;
 ```

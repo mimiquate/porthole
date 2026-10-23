@@ -2,9 +2,9 @@ defmodule Porthole.Tables.TraceExits do
   @moduledoc """
   Exits during a trace (`trace: %{exits: ...}`) of a process and of every
   process it starts: the reason's class and where it was raised, never the
-  reason's data (arguments, state). Exited processes are gone, so their pids
-  join only with rows collected before (e.g. other traces); the reason and
-  location usually say enough.
+  reason's data (arguments, state). Exited processes are gone, so `name` and
+  `initial_call` say who each was: identified on the node when the trace
+  started or when the process was spawned.
   """
 
   @behaviour Porthole.Table
@@ -47,7 +47,11 @@ defmodule Porthole.Tables.TraceExits do
   @impl true
   def columns do
     [
-      {:pid, :text, "Pid of the process that exited."},
+      {:pid, :text, "Pid of the process that exited (gone: it joins nothing)."},
+      {:name, :text, "Its registered name, if it had one."},
+      {:initial_call, :text,
+       "Its initial call (Mod.init/1 for a GenServer, the function a task ran), identified " <>
+         "when the trace started or when it was spawned; NULL if unknown."},
       {:reason, :text,
        "Class of the exit reason: normal, shutdown, killed, an exception (FunctionClauseError, " <>
          "MatchError) or another error atom (timeout, noproc). Never the reason's data."},
@@ -62,9 +66,13 @@ defmodule Porthole.Tables.TraceExits do
   @impl true
   def shape(raw) do
     rows =
-      for {pid, reason, location, at_ms} <- Map.get(raw, :rows, []) do
+      for {pid, reason, location, at_ms, identity} <- Map.get(raw, :rows, []) do
+        {name, initial_call} = Porthole.Trace.identity(identity)
+
         %{
           pid: Remote.pid(pid),
+          name: name,
+          initial_call: initial_call,
           reason: Term.name(Map.get(@exceptions, reason, reason)),
           location: Term.mfa(location),
           at_ms: at_ms

@@ -210,7 +210,9 @@ defmodule Porthole.MCP do
       Use it after a snapshot points at a process or module: who floods a mailbox (messages_to), \
       where a process spends its time (calls), why processes crash (exits). A trace stops early \
       at its event limit (see notes). messages_to makes every message sent on the node slightly \
-      slower while it runs: keep windows short (a few seconds).
+      slower while it runs: keep windows short (a few seconds). Read each table's limits below: \
+      messages_to does not see timer messages or call replies, and trace_calls.time_us is CPU \
+      time, not latency.
 
       #{Enum.map_join(Porthole.schema(:traces), "\n", &table_description/1)}
       """

@@ -445,6 +445,47 @@ defmodule Porthole.Gather do
       _other -> {:other, nil}
     end
 
+    # Who a process is, asked while it is alive (a row's pid may be gone by
+    # the time the agent reads it): {registered name, initial call}, either
+    # nil when unknown. $initial_call is set by proc_lib, so it names the
+    # module (Mod.init/1) rather than proc_lib's own entry point.
+    identity = fn pid ->
+      case :erlang.process_info(pid, [
+             :registered_name,
+             {:dictionary, :"$initial_call"},
+             :initial_call
+           ]) do
+        [{_, name}, {_, proc_lib_call}, {_, call}] ->
+          name = if name == [], do: nil, else: name
+          {name, if(is_tuple(proc_lib_call), do: proc_lib_call, else: call)}
+
+        _gone ->
+          {nil, nil}
+      end
+    end
+
+    # Who a process was, from how it was spawned: for one that exited before
+    # it could be asked. Only names, never the arguments.
+    spawned_as = fn
+      {:proc_lib, :init_p, [_, _, :gen, :init_it, [_, _, _, _, mod, _, _]]} -> {mod, :init, 1}
+      {:proc_lib, :init_p, [_, _, :gen, :init_it, [_, _, _, mod, _, _]]} -> {mod, :init, 1}
+      {:proc_lib, :init_p, [_, _, mod, fun, args]} when is_list(args) -> {mod, fun, length(args)}
+      {mod, fun, args} when is_list(args) -> {mod, fun, length(args)}
+      _other -> nil
+    end
+
+    # Identities already known (`known`, pid => identity), or asked once.
+    known_identity = fn pid, known ->
+      case :maps.find(pid, known) do
+        {:ok, id} ->
+          {id, known}
+
+        :error ->
+          id = identity.(pid)
+          {id, :maps.put(pid, id, known)}
+      end
+    end
+
     # -- The trace: what to enable in the session, what to keep ------------
 
     plan =
@@ -463,14 +504,17 @@ defmodule Porthole.Gather do
           enable = fn session ->
             :trace.send(session, [{[receiver, :_], [], []} | names], [])
             :trace.process(session, :all, true, [:send, :monotonic_timestamp])
+            %{}
           end
 
+          # Senders are identified when their first message is read.
           keep = fn
-            {:trace_ts, sender, :send, message, _to, ts} ->
-              {sender, receiver, tag.(tag, message), at.(ts)}
+            {:trace_ts, sender, :send, message, _to, ts}, known ->
+              {id, known} = known_identity.(sender, known)
+              {{sender, receiver, tag.(tag, message), at.(ts), id}, known}
 
-            _other ->
-              nil
+            _other, known ->
+              {nil, known}
           end
 
           {enable, keep}
@@ -486,24 +530,42 @@ defmodule Porthole.Gather do
           # proc_lib sets), plus every process they start from now on.
           flags = [:procs, :set_on_spawn, :monotonic_timestamp]
 
+          # Processes are identified now, and new ones when they are
+          # spawned: by the time they exit, they cannot be asked.
           enable = fn session ->
-            for pid <- :erlang.processes(),
-                pid != me,
-                {_, ancestors} <- [:erlang.process_info(pid, {:dictionary, :"$ancestors"})],
-                is_list(ancestors),
-                :lists.member(root, ancestors) or (name != [] and :lists.member(name, ancestors)),
-                do: :trace.process(session, pid, true, flags)
+            pids =
+              for pid <- :erlang.processes(),
+                  pid != me,
+                  {_, ancestors} <- [:erlang.process_info(pid, {:dictionary, :"$ancestors"})],
+                  is_list(ancestors),
+                  :lists.member(root, ancestors) or
+                    (name != [] and :lists.member(name, ancestors)),
+                  do: pid
 
-            :trace.process(session, root, true, flags)
+            :lists.foreach(fn pid -> :trace.process(session, pid, true, flags) end, [root | pids])
+            :maps.from_list(:lists.map(fn pid -> {pid, identity.(pid)} end, [root | pids]))
           end
 
           keep = fn
-            {:trace_ts, pid, :exit, reason, ts} ->
-              {reason_class, where} = class.(reason)
-              {pid, reason_class, where, at.(ts)}
+            {:trace_ts, _parent, :spawn, child, mfa, _ts}, known ->
+              # Asked right away, it may still be in proc_lib's entry point,
+              # or already gone: then how it was spawned says who it is.
+              id =
+                case identity.(child) do
+                  {name, {:proc_lib, _, _}} -> {name, spawned_as.(mfa)}
+                  {name, nil} -> {name, spawned_as.(mfa)}
+                  id -> id
+                end
 
-            _other ->
-              nil
+              {nil, :maps.put(child, id, known)}
+
+            {:trace_ts, pid, :exit, reason, ts}, known ->
+              {reason_class, where} = class.(reason)
+              id = :maps.get(pid, known, {nil, nil})
+              {{pid, reason_class, where, at.(ts), id}, known}
+
+            _other, known ->
+              {nil, known}
           end
 
           {enable, keep}
@@ -546,14 +608,16 @@ defmodule Porthole.Gather do
     # max_events were produced (read + still queued). The window's end is
     # also checked while events keep coming (`after` only fires on an empty
     # mailbox), every 100 events.
-    read = fn read, keep, rows, count ->
+    read = fn read, keep, rows, count, known ->
       left = max(0, window_end - :erlang.monotonic_time(:millisecond))
 
       receive do
         event when elem(event, 0) == :trace_ts ->
           # `case`, not `if`: evaluated, `if` costs an extra guard per event.
+          {row, known} = keep.(event, known)
+
           rows =
-            case keep.(event) do
+            case row do
               nil -> rows
               row -> [row | rows]
             end
@@ -562,23 +626,23 @@ defmodule Porthole.Gather do
 
           case count + 1 + queued >= max_events do
             true ->
-              {:events, rows, count + 1}
+              {:events, rows, count + 1, known}
 
             false ->
               case rem(count, 100) == 0 and
                      :erlang.monotonic_time(:millisecond) >= window_end do
-                true -> {:window, rows, count + 1}
-                false -> read.(read, keep, rows, count + 1)
+                true -> {:window, rows, count + 1, known}
+                false -> read.(read, keep, rows, count + 1, known)
               end
           end
 
         :porthole_watchdog ->
-          {:events, rows, count}
+          {:events, rows, count, known}
 
         {:DOWN, ^querier_ref, _, _, _} ->
-          {:querier, rows, count}
+          {:querier, rows, count, known}
       after
-        left -> {:window, rows, count}
+        left -> {:window, rows, count, known}
       end
     end
 
@@ -586,14 +650,16 @@ defmodule Porthole.Gather do
     # until `until`. The rest are left unread: the VM frees them when this
     # process exits.
     drain = fn
-      _drain, _keep, _until, rows, count when count >= max_events ->
+      _drain, _keep, _until, rows, count, _known when count >= max_events ->
         {rows, count, :all}
 
-      drain, keep, until, rows, count ->
+      drain, keep, until, rows, count, known ->
         receive do
           event when elem(event, 0) == :trace_ts ->
+            {row, known} = keep.(event, known)
+
             rows =
-              case keep.(event) do
+              case row do
                 nil -> rows
                 row -> [row | rows]
               end
@@ -601,7 +667,7 @@ defmodule Porthole.Gather do
             # The clock is read every 100 events.
             case rem(count, 100) == 0 and :erlang.monotonic_time(:millisecond) > until do
               true -> {rows, count + 1, :deadline}
-              false -> drain.(drain, keep, until, rows, count + 1)
+              false -> drain.(drain, keep, until, rows, count + 1, known)
             end
         after
           0 -> {rows, count, :all}
@@ -614,14 +680,14 @@ defmodule Porthole.Gather do
 
       {enable, keep} ->
         session = :trace.session_create(:porthole, me, [])
-        enable.(session)
+        known = enable.(session)
         dog = watchdog.(session)
-        {stopped, rows, count} = read.(read, keep, [], 0)
+        {stopped, rows, count, known} = read.(read, keep, [], 0, known)
         :trace.session_destroy(session)
         send(dog, :porthole_stop)
         elapsed_ms = div(:erlang.monotonic_time(:nanosecond) - started, 1_000_000)
         until = :erlang.monotonic_time(:millisecond) + read_ms
-        {rows, count, read} = drain.(drain, keep, until, rows, count)
+        {rows, count, read} = drain.(drain, keep, until, rows, count, known)
         rows = :lists.reverse(rows)
 
         %{

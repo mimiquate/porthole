@@ -123,7 +123,45 @@ defmodule Porthole.TraceTest do
 
       refute inspect(result) =~ "4242"
       refute inspect(result) =~ "a bare string"
-      assert ["card", nil] -- Enum.map(result.rows, &Enum.at(&1, 3)) == []
+
+      {:ok, result} =
+        query("SELECT DISTINCT tag FROM trace_messages",
+          trace: %{messages_to: "trace_test_secret"}
+        )
+
+      assert Enum.sort(result.rows, :desc) == [["card"], [nil]]
+    end
+
+    test "identifies senders on the node, even after they exit" do
+      start_supervised!({Inbox, :trace_test_who})
+      named = sender(:trace_test_who, :tick, 5)
+      Process.register(named, :trace_test_named_sender)
+
+      # A GenServer that sends once and exits right away.
+      {:ok, _} =
+        Task.start(fn ->
+          for _ <- 1..20 do
+            {:ok, pid} = GenServer.start(Inbox, nil)
+            send(:trace_test_who, :once)
+            GenServer.stop(pid)
+            Process.sleep(5)
+          end
+        end)
+
+      {:ok, result} =
+        query(
+          "SELECT DISTINCT tag, sender_name, sender_initial_call FROM trace_messages ORDER BY 1",
+          trace: %{messages_to: "trace_test_who"}
+        )
+
+      # A plain spawn starts in :erlang.apply/2 (as processes shows it): the
+      # registered name is what identifies it.
+      assert ["tick", "trace_test_named_sender", _apply] =
+               Enum.find(result.rows, &(hd(&1) == "tick"))
+
+      # The task that sent :once had exited by the time the query ran.
+      assert ["once", nil, once_call] = Enum.find(result.rows, &(hd(&1) == "once"))
+      assert once_call =~ "Porthole.TraceTest"
     end
 
     test "stops at the event limit, and says so" do
@@ -205,7 +243,12 @@ defmodule Porthole.TraceTest do
 
   describe "exits" do
     test "reports why a supervisor's children exit: the exception class and where" do
-      children = [Supervisor.child_spec({Worker, 20}, id: :worker)]
+      # One child crashes 20 ms after it starts, the other at once: too soon
+      # to be asked who it is, so its name comes from how it was spawned.
+      children = [
+        Supervisor.child_spec({Worker, 20}, id: :worker),
+        Supervisor.child_spec({Worker, 0}, id: :instant)
+      ]
 
       start_supervised!(%{
         id: :trace_test_sup,
@@ -214,6 +257,15 @@ defmodule Porthole.TraceTest do
            [children, [strategy: :one_for_one, max_restarts: 1_000, name: :trace_test_sup]]},
         type: :supervisor
       })
+
+      {:ok, who} =
+        query("SELECT DISTINCT initial_call FROM trace_exits WHERE reason <> 'normal'",
+          trace: %{exits: "trace_test_sup"},
+          window_ms: 300
+        )
+
+      # Each crashed child had exited (it lived 20 ms), but it is identified.
+      assert who.rows == [["Porthole.TraceTest.Worker.init/1"]]
 
       {:ok, result} =
         query(

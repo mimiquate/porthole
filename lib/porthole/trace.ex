@@ -195,5 +195,19 @@ defmodule Porthole.Trace do
     end
   end
 
+  @doc """
+  Renders who a process is, as the node identified it: its registered name
+  and initial call, as `processes` shows them (a supervisor's as
+  `Mod.init/1`).
+  """
+  @spec identity({atom() | nil, mfa() | nil} | nil) :: {String.t() | nil, String.t() | nil}
+  def identity({name, call}),
+    do: {if(name, do: Porthole.Term.name(name)), initial_call(call)}
+
+  def identity(_unknown), do: {nil, nil}
+
+  defp initial_call({:supervisor, module, 1}), do: Porthole.Term.mfa({module, :init, 1})
+  defp initial_call(call), do: Porthole.Term.mfa(call)
+
   defp bad_request(message), do: {:error, Error.new(:bad_request, message)}
 end
