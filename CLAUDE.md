@@ -143,6 +143,10 @@ when a real question needs it.
     stops at `max_rows + 1`. Rows name processes still alive at the end (helpers copied
     from `trace/7`, since evaluated functions cannot share them); times from the window's
     start.
+  - Opt-in review (2026-10-26): enforcement was right everywhere, but `tools/list` described
+    tracing and shapes from the environment policy alone, so a token without them was still
+    told about them (then refused). The description and the `trace` argument now follow the
+    client's effective policy (environment ∩ token).
   - Flags set on every process (`flag_all`) belong to the session and are removed with it,
     including the default for new processes: checked with `trace:session_info(Pid)` before,
     during and after each kind (2026-10-26), and guarded by a remote test.

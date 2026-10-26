@@ -95,7 +95,23 @@ defmodule Porthole.MCP do
   end
 
   defp request("ping", _params, _context), do: {:ok, %{}}
-  defp request("tools/list", _params, _context), do: {:ok, %{tools: [tool()]}}
+  # Described as this client may use it: the environment policy narrowed by
+  # the client's own (a token's), so an agent is not told about traces or
+  # shapes it would be refused.
+  defp request("tools/list", _params, context) do
+    policy =
+      Porthole.Policy.intersect(
+        Porthole.Policy.environment(),
+        context.opts[:policy] || Porthole.Policy.new()
+      )
+
+    tool =
+      if :trace in policy.tiers,
+        do: tool(policy),
+        else: update_in(tool(policy), [:inputSchema, :properties], &Map.delete(&1, :trace))
+
+    {:ok, %{tools: [tool]}}
+  end
 
   defp request("tools/call", %{"name" => "query", "arguments" => %{"sql" => sql} = args}, context)
        when is_binary(sql) do
@@ -130,10 +146,10 @@ defmodule Porthole.MCP do
 
   defp request(method, _params, _context), do: {:error, -32601, "method not found: #{method}"}
 
-  defp tool do
+  defp tool(policy) do
     %{
       name: "query",
-      description: description(),
+      description: description(policy),
       inputSchema: %{
         type: "object",
         properties: %{
@@ -180,7 +196,7 @@ defmodule Porthole.MCP do
                 }
               }
               |> Map.merge(
-                if shapes?(),
+                if shapes?(policy),
                   do: %{
                     shapes: %{
                       type: "string",
@@ -201,7 +217,7 @@ defmodule Porthole.MCP do
     }
   end
 
-  defp description do
+  defp description(policy) do
     """
     Read-only SQL (SQLite) over the live Erlang/Elixir system. Tables are collected fresh for every \
     query; this is not an atomic snapshot. Every table has a `node` column: join on it as well as on pids. \
@@ -209,37 +225,38 @@ defmodule Porthole.MCP do
     If `errors` is not empty, rows from those nodes are missing from the result.
 
     #{Enum.map_join(Porthole.schema(), "\n", &table_description/1)}
-    #{tracing()}\
+    #{tracing(policy)}\
     """
   end
 
-  # Described only where the server lets queries trace.
-  defp tracing do
-    if :trace in Porthole.Policy.environment().tiers do
+  # Described only where this client may trace.
+  defp tracing(policy) do
+    if :trace in policy.tiers do
       """
 
       Tracing: pass `trace` (one key) with window_ms to record what happens during the window, \
       and query the matching table (join pids with processes, collected at the end of the window). \
       Use it after a snapshot points at a process or module: who floods a mailbox (messages_to), \
-      where a process spends its time (calls), why processes crash (exits)#{shapes_use()}. \
+      where a process spends its time (calls), why processes crash (exits)#{shapes_use(policy)}. \
       A trace stops early \
       at its event limit (see notes). messages_to makes every message sent on the node slightly \
       slower while it runs: keep windows short (a few seconds). Read each table's limits below: \
       messages_to does not see timer messages or call replies, and trace_calls.time_us is CPU \
       time, not latency.
 
-      #{Porthole.schema(:traces) |> Enum.reject(&(&1.name == "trace_shapes" and not shapes?())) |> Enum.map_join("\n", &table_description/1)}
+      #{Porthole.schema(:traces) |> Enum.reject(&(&1.name == "trace_shapes" and not shapes?(policy))) |> Enum.map_join("\n", &table_description/1)}
       """
     else
       ""
     end
   end
 
-  # Shapes are described to agents only where an operator turned them on.
-  defp shapes?, do: Porthole.Policy.environment().trace_shapes
+  # Shapes are described only where an operator turned them on, and the
+  # client's policy keeps them.
+  defp shapes?(policy), do: :trace in policy.tiers and policy.trace_shapes
 
-  defp shapes_use do
-    if shapes?(),
+  defp shapes_use(policy) do
+    if shapes?(policy),
       do:
         ", what a function receives and returns and how long it takes (shapes: silent " <>
           "{:error, ...} returns, a changed payload format, latency)",

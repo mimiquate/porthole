@@ -64,8 +64,9 @@ defmodule Porthole.MCPTest do
     assert %{result: %{tools: [%{description: description, inputSchema: schema}]}} =
              call("tools/list")
 
+    # Tracing off (the default): neither described nor offered, and refused.
     refute description =~ "trace_messages"
-    assert schema.properties.trace.maxProperties == 1
+    refute Map.has_key?(schema.properties, :trace)
 
     assert %{isError: true, content: [%{text: "error (not_allowed)" <> _}]} =
              query(%{
@@ -77,9 +78,12 @@ defmodule Porthole.MCPTest do
     Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
     on_exit(fn -> Application.delete_env(:porthole, :policy) end)
 
-    assert %{result: %{tools: [%{description: description}]}} = call("tools/list")
+    assert %{result: %{tools: [%{description: description, inputSchema: schema}]}} =
+             call("tools/list")
+
     assert description =~ "trace_messages"
     assert description =~ "messages_to"
+    assert schema.properties.trace.maxProperties == 1
 
     # Shapes are described only where they are enabled.
     assert %{result: %{tools: [%{description: description, inputSchema: schema}]}} =
@@ -106,6 +110,37 @@ defmodule Porthole.MCPTest do
              })
 
     assert %{"rows" => [[_count]]} = JSON.decode!(text)
+  end
+
+  test "each client is told only about what its policy allows" do
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    describe = fn policy ->
+      context = %{client: "test", opts: [policy: policy]}
+
+      %{result: %{tools: [%{description: description, inputSchema: schema}]}} =
+        MCP.handle(%{"jsonrpc" => "2.0", "id" => 1, "method" => "tools/list"}, context)
+
+      trace = schema.properties[:trace]
+      {description, trace != nil and Map.has_key?(trace.properties, :shapes), trace != nil}
+    end
+
+    # A token with everything the server allows.
+    assert {description, true, true} = describe.(Porthole.Policy.new())
+    assert description =~ "trace_messages"
+    assert description =~ "trace_shapes"
+
+    # A token without shapes: tracing, but no shapes.
+    assert {description, false, true} = describe.(Porthole.Policy.new(trace_shapes: false))
+    assert description =~ "trace_messages"
+    refute description =~ "trace_shapes"
+
+    # A token without the trace tier: no tracing at all.
+    # (the trace argument is not even offered)
+    assert {description, false, false} = describe.(Porthole.Policy.new(tiers: [:observe]))
+    refute description =~ "trace_messages"
+    refute description =~ "Tracing:"
   end
 
   test "notifications and protocol errors" do

@@ -534,8 +534,10 @@ are names, not data.
 > `--allow-trace-shapes` with `mix porthole.mcp` and `mix porthole.server`.
 > Enable them only for code whose maps you know are keyed by names, not data.
 > A token's policy can still turn them off for one client
-> (`policy: [trace_shapes: false]`). Until they are enabled, agents are not
-> told about them, and a request for shapes says why they are off. Filtering
+> (`policy: [trace_shapes: false]`). Agents are only told about what their
+> own token allows: without shapes, the tool's description and arguments
+> don't mention them (without the `trace` tier, tracing at all), and a
+> request for them says why they are off. Filtering
 > keys that look like data is planned.
 
 Shapes trace one function at a time (`Module.fun/arity`), of your
