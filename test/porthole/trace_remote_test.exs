@@ -91,6 +91,25 @@ defmodule Porthole.TraceRemoteTest do
     refute :erpc.call(node, :code, :is_loaded, [Porthole.Gather])
   end
 
+  test "flags set on every process are removed when the trace ends", %{node: node} do
+    # A process the trace is not about: messages_to flags every process.
+    bystander = :erpc.call(node, :erlang, :spawn, [:timer, :sleep, [:infinity]])
+    on_exit(fn -> :erpc.call(node, :erlang, :exit, [bystander, :kill]) end)
+    assert :erpc.call(node, :trace, :session_info, [bystander]) == []
+
+    task = Task.async(fn -> trace_query(node, 1_000) end)
+
+    eventually(fn ->
+      :erpc.call(node, :trace, :session_info, [bystander]) != [] and
+        :erpc.call(node, :trace, :session_info, [:new_processes]) != []
+    end)
+
+    assert {:ok, _} = Task.await(task, 10_000)
+    # The session's settings went with it, on every process and for new ones.
+    assert :erpc.call(node, :trace, :session_info, [bystander]) == []
+    assert :erpc.call(node, :trace, :session_info, [:new_processes]) == []
+  end
+
   test "the trace stops when the query is abandoned", %{node: node, baseline: baseline} do
     task = Task.async(fn -> trace_query(node, 10_000) end)
     eventually(fn -> sessions(node) == baseline + 1 end)

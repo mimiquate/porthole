@@ -136,6 +136,9 @@ when a real question needs it.
     time, checked after `read`. Times (`at_ms`, `elapsed_ms`) are from the window's start,
     after setup. `max_concurrent_traces` (1) in the policy and `Porthole.Limiter`: up to
     `max_concurrent` traces could run on a node, each with its own 24 MB and setup.
+  - Flags set on every process (`flag_all`) belong to the session and are removed with it,
+    including the default for new processes: checked with `trace:session_info(Pid)` before,
+    during and after each kind (2026-10-26), and guarded by a remote test.
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox
