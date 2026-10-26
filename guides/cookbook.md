@@ -343,8 +343,8 @@ It needs the server to allow tracing (see
 "Shop.Notifications"}` in the MCP tool, `--trace messages_to=Shop.Notifications`
 with `mix porthole.query`, or `trace: %{messages_to: "Shop.Notifications"}`
 with `Porthole.query/2`. Keep windows short: a few seconds is usually
-enough (at most 10 s by default), and a trace stops at its event limit
-anyway (`notes` says when).
+enough (at most 10 s by default), and a trace stops early at its event or
+memory limit anyway (`notes` says when).
 
 Who floods a mailbox, and with what kind of message. Senders are identified
 on the node while the trace runs, so short-lived ones are named even after

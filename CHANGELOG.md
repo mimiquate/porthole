@@ -2,47 +2,47 @@
 
 ## Unreleased
 
-- **Tracing.** A query can record what happens during its window, to answer
-  *who* and *why* where snapshots only show *what*: pass `trace` (MCP tool),
-  `--trace` (`mix porthole.query`) or `:trace` (`Porthole.query/2`) with a
-  window, and query the matching table:
-  - `messages_to` → `trace_messages`: who sends to a process, and what kind of
-    message (its tag, never its contents);
-  - `calls` → `trace_calls`: calls and running time per process and function
-    of an application module (VM counters, no events);
-  - `exits` → `trace_exits`: exits of a process and of every process it
-    starts, with the reason's class and where it was raised (never its data).
+### Tracing
 
-  Off by default: enable it with `tiers: [:observe, :trace]`,
-  `PORTHOLE_TRACE=true` (sidecar), `--trace` (`fly.up`, `k8s.up`) or
-  `--allow-trace` (`mcp`, `server`). Each trace runs in an OTP trace session
-  that the VM removes when it ends (including when the query is abandoned or
-  the connection drops), stops gracefully when its events hold 24 MB (they
-  copy what they trace), runs one at a time (`max_concurrent_traces`, new
-  policy limit), lasts at most `max_trace_window_ms` (10 s, new
-  policy limit), stops at `max_trace_events` (10,000 per node, new policy
-  limit) counted as events are produced, and on a busy node returns the
-  events it could read with a note instead of timing out.
-- A note that only informs (a trace found nothing to trace on a node) no
-  longer marks the result `truncated`.
-- Trace rows say who each process was (`sender_name`,
-  `sender_initial_call` and `sender_started_by`; `name`, `initial_call` and
-  `started_by` on exits, shapes and calls, for calls only if still alive at
-  the end of the window), identified on the node while the trace runs, so
-  short-lived processes, and the tasks a LiveView or job starts, are named
-  after they exit.
-- **Shapes** (`trace: {"shapes": "Module.fun/arity"}` → `trace_shapes`):
-  every call to one function during the window, with the *shapes* of its
-  arguments and result (types and sizes in place of values; atoms and map
-  keys as they are), its outcome (`ok`, `error`, `returned`, `raised`) and
-  its wall-clock duration. For silent `{:error, …}` returns and changed
-  payload formats. **Map keys can be personal data**, so shapes are off
-  unless an operator enables them, separately from tracing:
-  `trace_shapes: true`, `PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes`
-  (`fly.up`, `k8s.up`) or `--allow-trace-shapes` (`mcp`, `server`).
-- Setting up a trace no longer pauses the node: processes are flagged one at
-  a time at low priority, before the window starts (flagging them in one call
-  paused other processes ~17 ms at 100k processes).
+A query can now record what happens during its window, to answer *who* and
+*why* where snapshots only show *what*. Pass `trace` (MCP tool), `--trace
+KIND=TARGET` (`mix porthole.query`) or `:trace` (`Porthole.query/2`, which
+also accepts modules, names, pids and `{module, function, arity}`) with a
+window, and query the matching table:
+
+- `messages_to` → `trace_messages`: who sends to a process, and what kind of
+  message (its tag, never its contents).
+- `calls` → `trace_calls`: calls and CPU time per process and function, from
+  VM counters (no events).
+- `exits` → `trace_exits`: exits of a process and of every process it
+  starts, with the reason's class and where it was raised (never its data).
+- `shapes` → `trace_shapes`: every call to one function, with the *shapes*
+  of its arguments and result (types and sizes in place of values; atoms and
+  map keys as they are), its outcome (`ok`, `error`, `returned`, `raised`)
+  and its wall-clock duration: for silent `{:error, …}` returns and changed
+  payload formats.
+
+Rows say who each process was (registered name, initial call, who started
+it), identified on the node while the trace runs, so short-lived processes
+are named after they exit.
+
+**Off by default.** Enable tracing with `tiers: [:observe, :trace]`,
+`PORTHOLE_TRACE=true` (sidecar), `--trace` (`fly.up`, `k8s.up`) or
+`--allow-trace` (`mcp`, `server`). **Map keys can be personal data**, so
+shapes need their own opt-in: `trace_shapes: true`,
+`PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes` or `--allow-trace-shapes`. A
+token's policy can turn either off, and agents are only told about what
+their token allows.
+
+**Bounded.** Each trace runs on the node by evaluation (nothing installed),
+in an OTP trace session the VM removes, with every setting it made, when the
+trace ends for any reason (window over, query abandoned, connection lost).
+New policy limits: `max_trace_window_ms` (10 s), `max_trace_events` (10,000
+per node, counted as events are produced), `max_concurrent_traces` (1). A
+watchdog also stops a trace when its events hold 24 MB, keeping what came.
+Setup flags processes one at a time, without pausing the node. On a busy
+node a trace returns what it read in time, with a note. Measured costs are
+in the team-setup guide.
 
 ## 0.1.1 - 2026-10-07
 

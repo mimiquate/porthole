@@ -188,7 +188,8 @@ aggregates and subqueries, and the running system stays the source of truth.
   token carries its own policy, and removing it revokes access.
 - **Traces are bounded too.** A trace runs in an OTP trace session that the
   VM removes as soon as it ends (window over, query abandoned, connection
-  lost), and stops at an event limit counted as events are produced. Messages
+  lost); it lasts at most 10 s, stops early at an event or memory limit, and
+  runs one at a time. Messages
   and exits keep metadata only: a message's sender and kind, never its
   contents; an exit's reason class, never its data. **Shapes show more:** the
   structure of a function's arguments and results, with their atoms and

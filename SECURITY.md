@@ -32,9 +32,10 @@ from intended behavior. The full discussion is in
   sampling windows, SQLite's memory, and the rate and concurrency of
   queries per client.
 - **Traces are bounded and leave nothing behind.** Tracing is off unless the
-  server enables it. A trace targets what the agent names (never a whole
-  module of OTP or Elixir), stops at an event limit counted as the VM
-  produces events, and runs in an OTP trace session the VM removes when the
+  server enables it. A trace targets what the agent names (never a module of
+  OTP or Elixir), lasts at most 10 s, stops early at an event limit (counted
+  as the VM produces events) or a memory limit, runs one at a time, and runs
+  in an OTP trace session the VM removes, with every setting it made, when the
   trace ends for any reason. Message and exit traces keep metadata only: a
   message's sender and kind, an exit's reason class and location, never
   message contents, arguments or state.

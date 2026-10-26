@@ -482,14 +482,16 @@ What a trace keeps, and what it doesn't:
   the message. `trace_exits` keeps the reason's *class* (`FunctionClauseError`,
   `badarg`, `shutdown`) and where it was raised, never the arguments or state
   that crash reasons often carry. The rest is dropped on your node.
-- **Who each process was.** Senders and exiting processes are identified on
-  your node while the trace runs (registered name and initial call, as in
+- **Who each process was.** Rows name their processes, identified on your
+  node while the trace runs (registered name and initial call, as in
   `processes`, and who started them: the process a task works for, or its
-  parent), so short-lived ones are named even though they are gone by the
-  time the agent reads the result.
-- **Only the application's code.** `calls` refuses modules of OTP and Elixir
-  themselves (`:lists`, `Enum`, `:gen_server`): tracing them would slow down
-  everything on the node.
+  parent), so short-lived senders, exits and callers are named even though
+  they are gone by the time the agent reads the result. `calls` asks at the
+  end of the window, so it names only the processes still alive then.
+- **Only the application's code.** `calls` and `shapes` refuse modules of
+  OTP and Elixir themselves (`:lists`, `Enum`, `:gen_server`): tracing them
+  would slow down everything on the node. Libraries you depend on (Phoenix,
+  Ecto, Oban…) are allowed.
 - **Not every message.** `messages_to` sees messages sent by processes of the
   same node. It does not see timer messages (`Process.send_after`, `:timer`,
   which the VM delivers), replies to the process's own calls (a
@@ -544,8 +546,9 @@ Shapes trace one function at a time (`Module.fun/arity`), of your
 application, never of OTP or Elixir. Each call's event copies its arguments
 into the tracing process: with large arguments (a big cache or state), a
 trace reaches its memory limit (below) after a few calls and returns those as
-a sample, with a note. Pick a function that handles the payload rather than
-the whole state.
+a sample, with a note; with arguments of several megabytes, called often, the
+backstop may stop it first, and the agent gets an error saying so. Pick a
+function that handles the payload rather than the whole state.
 
 #### How a trace is bounded
 
@@ -562,10 +565,9 @@ connection to the sidecar drops; it also stops itself:
   counted as the VM *produces* events, not as they are read: on every event,
   and by a watchdog process that checks every millisecond. Past the limit,
   the result is a sample of the first part of the window, and `notes` says
-  how long it covers. Raise it with care: events wait in the tracing process
-  until they are read (about 20,000 a second), under its memory cap, and far
-  above the default (~100,000 and more) a flood can fill that cap, in which
-  case the trace returns nothing;
+  how long it covers. Raising it lets a trace record more, but events wait in
+  the tracing process until they are read (about 20,000 a second), so a
+  large limit mostly runs into the memory limit below;
 - **at a memory limit**: events copy what they trace (messages,
   arguments; large binaries are shared, not copied), so the watchdog also
   stops the trace when they hold 24 MB, keeping what came, with a note; past
@@ -591,14 +593,15 @@ Measured on a laptop (OTP 29, 8 schedulers), on a node without Porthole:
 | `messages_to`: every message sent on the node | +~70 ns (the VM checks whether it is for the target) |
 | `shapes`: each call to the traced function | +2–4 µs with a 1 KB JSON-like payload (a call and a return event, each copying its data; ~0.8 µs with small arguments), plus 1–40 µs to compute the shapes, in the tracing process at low priority. The event limit stops it after ~5,000 calls: a tight loop over that function was covered in ~2–3 s, a function called 500 times a second fully, a saturated node partially (800–1,100 calls, with a note) |
 | Any trace: memory on the node | ~15–36 MB at peak in the measurements above (the tracer's queue, held under 24 MB, plus what it processes) |
-| `messages_to` / `calls`: setting up | every process is flagged one at a time at low priority before the window starts (~0.2–0.35 s at 100k processes), without pausing the node; flagging them in one call paused other processes ~17 ms at 100k |
+| `messages_to` / `calls` / `shapes`: setting up | every process is flagged one at a time at low priority before the window starts (~0.2–0.35 s at 100k processes), without pausing the node; flagging them in one call paused other processes ~17 ms at 100k |
 | Any trace: when it ends | the VM's `erts_trace_cleaner` removes the session's settings from every process: ~7 reductions per process (~650k at 100k processes), with no measurable pause |
 | `messages_to` / `exits`: each recorded event | a copy to the tracing process, read at low priority |
 | A flood (8 processes sending as fast as they can) | stopped at 10,000 events after ~20–50 ms; ~2 MB held while tracing |
 
 Nothing stays behind: we checked that the session is gone after a normal
-end, a killed query and a dropped connection. Keep windows short; a few
-seconds answers most questions.
+end, a killed query and a dropped connection, and that the flags a trace
+sets on every process are removed with it (tests guard both). Keep windows
+short; a few seconds answers most questions.
 
 ### Audit
 
