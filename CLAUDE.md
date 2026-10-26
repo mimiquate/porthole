@@ -120,6 +120,16 @@ when a real question needs it.
     events copy the arguments, so a function called often with MB-sized arguments gets its
     tracer killed at the heap cap (by design): the collector now explains `:killed` instead
     of "collection failed: :killed".
+  - Shapes measured end to end (2026-10-26, a peer without Porthole, the app module loaded
+    on it, a 1.2 KB order payload, 4.9 KB in memory): a hot loop and a saturated node got
+    the tracer killed at its 32 MB heap cap: copying arguments into events reaches it long
+    before 10k events, and on the heap a GC moving a backlog in tripped the cap first. Fixed
+    for every trace kind: the tracer queues off heap (`message_queue_data: off_heap`,
+    process memory still counts the queue), the watchdog also stops the trace at 24 MB of
+    process memory (`stopped: :memory`, events kept, a note), and the heap cap is 48 MB as a
+    backstop. After: hot loop ~4,900 calls in 1.8–2.8 s; 500 calls/s all of them (~1,600 in
+    5 s); saturated 800–1,100 calls with the too-busy note, ~13 s; +2.2–3.7 µs per traced
+    call with that payload; node memory +15–36 MB at peak; no session left.
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox

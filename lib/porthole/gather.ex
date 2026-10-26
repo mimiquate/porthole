@@ -378,9 +378,14 @@ defmodule Porthole.Gather do
           map()
   def trace(_caller, querier, spec, window_ms, read_ms, max_events, max_rows) do
     me = self()
-    # The events are copies of the traced messages: past this, the VM kills
-    # this process, and the session goes with it.
-    :erlang.process_flag(:max_heap_size, %{size: 4_000_000, kill: true, error_logger: false})
+    # The events are copies of what is traced (messages, arguments). Queued
+    # off the heap: the watchdog sees them (process memory) and stops the
+    # trace at 24 MB, keeping what came; on the heap, a garbage collection
+    # moving a large backlog into it tripped the heap cap first (measured).
+    # The cap (48 MB of heap, then the VM kills this process and the session
+    # with it) bounds what is being processed.
+    :erlang.process_flag(:message_queue_data, :off_heap)
+    :erlang.process_flag(:max_heap_size, %{size: 6_000_000, kill: true, error_logger: false})
     querier_ref = :erlang.monitor(:process, querier)
     started = :erlang.monotonic_time(:nanosecond)
     at = fn ts -> div(ts - started, 1_000_000) end
@@ -853,7 +858,10 @@ defmodule Porthole.Gather do
     # -- Collecting events, within the limits ------------------------------
 
     # Holds the session too, at maximum priority: a low-priority tracer may
-    # not run for a while on a busy node, while events keep coming.
+    # not run for a while on a busy node, while events keep coming. Stops
+    # the trace when the events produced reach max_events, or when the
+    # tracer holds 24 MB (large messages or arguments, copied into each
+    # event, can reach that long before the event limit).
     watchdog = fn session ->
       :erlang.spawn(fn ->
         :erlang.process_flag(:priority, :max)
@@ -868,10 +876,14 @@ defmodule Porthole.Gather do
               :ok
           after
             1 ->
-              case :erlang.process_info(me, :message_queue_len) do
-                {:message_queue_len, queued} when queued >= max_events ->
+              case :erlang.process_info(me, [:message_queue_len, :memory]) do
+                [{_, queued}, _] when queued >= max_events ->
                   :trace.session_destroy(session)
-                  send(me, :porthole_watchdog)
+                  send(me, {:porthole_watchdog, :events})
+
+                [_, {_, bytes}] when bytes >= 25_165_824 ->
+                  :trace.session_destroy(session)
+                  send(me, {:porthole_watchdog, :memory})
 
                 _other ->
                   watch.(watch)
@@ -915,8 +927,8 @@ defmodule Porthole.Gather do
               end
           end
 
-        :porthole_watchdog ->
-          {:events, rows, count, known}
+        {:porthole_watchdog, why} ->
+          {why, rows, count, known}
 
         {:DOWN, ^querier_ref, _, _, _} ->
           {:querier, rows, count, known}

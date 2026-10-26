@@ -439,8 +439,8 @@ defmodule Porthole.TraceTest do
       assert result.rows == [[0]]
     end
 
-    test "huge arguments, often, stop the trace at its memory cap, with a clear error" do
-      # Each call event copies its arguments: a few of these exceed the cap.
+    test "huge arguments, often, stop the trace at its memory limit, keeping what came" do
+      # Each call event copies its arguments: a few of these reach the limit.
       huge = Map.new(1..200_000, &{&1, &1})
 
       huge_caller =
@@ -457,12 +457,16 @@ defmodule Porthole.TraceTest do
       on_exit(fn -> Process.exit(huge_caller, :kill) end)
 
       {:ok, result} =
-        query("SELECT count(*) FROM trace_shapes",
-          trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
+        query("SELECT count(*) FROM trace_shapes WHERE args LIKE '%(199984 more)%'",
+          trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"},
+          window_ms: 5_000
         )
 
-      assert [%{message: message}] = result.errors
-      assert message =~ "held more memory than a trace may use"
+      assert result.errors == []
+      assert [[calls]] = result.rows
+      assert calls > 0
+      assert Enum.any?(result.notes, &(&1 =~ "reached the memory a trace may hold"))
+      assert result.truncated
       assert length(:trace.session_info(:all)) == 1
     end
 

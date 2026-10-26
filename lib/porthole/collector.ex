@@ -246,9 +246,10 @@ defmodule Porthole.Collector do
   # events are copies of what it traces.
   defp describe(:killed, _timeout),
     do:
-      "the trace was stopped on this node: its events held more memory than a trace may " <>
-        "use (they copy what they trace: large messages or arguments, often). Trace " <>
-        "something that handles smaller data, or use a shorter window"
+      "the trace was stopped on this node: its events grew past the memory a trace may " <>
+        "use faster than it could be stopped (they copy what they trace: very large " <>
+        "messages or arguments, often). Trace something that handles smaller data, or use " <>
+        "a shorter window"
 
   defp describe({:old_otp, release}, _),
     do: "Porthole needs OTP 27+, this node runs OTP #{release}"
