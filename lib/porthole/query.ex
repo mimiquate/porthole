@@ -136,16 +136,23 @@ defmodule Porthole.Query do
            "for as long as it runs; a few seconds usually answers), got #{window}"
        )}
 
-  defp check_trace({:shapes, _}, _window, %Policy{trace_shapes: false}),
+  defp check_trace(trace, _window, policy) do
+    with :ok <- Policy.authorize(policy, :trace), do: check_shapes(trace, policy)
+  end
+
+  # Shapes show map keys as they are, and keys can be personal data: only
+  # where an operator turned them on.
+  defp check_shapes({:shapes, _}, %Policy{trace_shapes: false}),
     do:
       {:error,
        Error.new(
          :not_allowed,
-         "this server does not allow shapes in traces (trace_shapes: false): they show " <>
-           "map keys, which can be data; the other traces are available"
+         "shapes are off on this server: they show map keys as they are, and keys can be " <>
+           "personal data, so an operator must enable them (trace_shapes: true). The other " <>
+           "traces are available"
        )}
 
-  defp check_trace(_trace, _window, policy), do: Policy.authorize(policy, :trace)
+  defp check_shapes(_trace, _policy), do: :ok
 
   # A pid is <0.X.Y> on every node: it names a process on one node only.
   defp check_trace_nodes(trace, nodes) do

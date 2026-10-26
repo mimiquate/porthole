@@ -10,7 +10,7 @@ defmodule Porthole.GuidesTest do
   setup_all do
     Porthole.Demo.start()
     on_exit(&Porthole.Demo.stop/0)
-    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
     on_exit(fn -> Application.delete_env(:porthole, :policy) end)
     Process.sleep(100)
     :ok

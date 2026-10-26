@@ -359,6 +359,8 @@ defmodule Porthole.TraceTest do
 
   describe "shapes" do
     setup do
+      Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
+
       payloads = [%{"rate" => 12.5, "card" => "4242 4242"}, %{"rate" => "13.10"}, :boom]
 
       caller =
@@ -412,15 +414,17 @@ defmodule Porthole.TraceTest do
       assert result.rows == [[0]]
     end
 
-    test "a policy can keep shapes out; they need one function, of the application" do
-      Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: false)
+    test "shapes are off unless enabled; they need one function, of the application" do
+      # Tracing on, shapes not enabled: the default.
+      Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
 
       assert {:error, %Error{reason: :not_allowed, message: message}} =
                query("SELECT * FROM trace_shapes",
                  trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
                )
 
-      assert message =~ "trace_shapes: false"
+      assert message =~ "shapes are off on this server"
+      assert message =~ "trace_shapes: true"
 
       # Other traces still work.
       assert {:ok, _} =
@@ -428,7 +432,14 @@ defmodule Porthole.TraceTest do
                  trace: %{calls: "Porthole.TraceTest.Parser"}
                )
 
-      Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+      # A token can still turn them off where the server turned them on.
+      Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
+
+      assert {:error, %Error{reason: :not_allowed}} =
+               query("SELECT * FROM trace_shapes",
+                 trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"},
+                 policy: Porthole.Policy.new(trace_shapes: false)
+               )
 
       assert {:error, %Error{reason: :bad_request}} =
                query("SELECT * FROM trace_shapes", trace: %{shapes: "Porthole.TraceTest.Parser"})

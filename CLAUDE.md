@@ -106,9 +106,12 @@ when a real question needs it.
     and output trace is the legitimate gap next to error trackers (which see what raises,
     with history): silent `{:error, ...}` returns, format drift, latency. Decisions: show
     every map key (cut at 64 bytes, 16 per map), atoms too, never other values; be loud
-    about it in the docs; `trace_shapes` policy flag (on by default, any layer can turn it
-    off; `PORTHOLE_TRACE_SHAPES=false`, `--no-trace-shapes`); key filtering is a later
-    privacy enhancement. Measured (spike): +370 ns per call for return events alone, +800
+    about it in the docs; key filtering is a later privacy enhancement. **Opt-in** (the
+    user, 2026-10-26: teams must never find out by mistake that personal data reached an
+    agent): `trace_shapes` is off in the environment policy unless enabled (`true`,
+    `PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes` on `fly.up`/`k8s.up`,
+    `--allow-trace-shapes` on `mcp`/`server`); session and request policies can only turn
+    it off; the tool description mentions shapes only where enabled. Measured (spike): +370 ns per call for return events alone, +800
     ns with call events, bounded by the event limit (5,000 calls); evaluated shapes cost
     1–41 µs per term. `{message, false}` in a match spec suppresses the call event but
     keeps return/exception events. Demo: `Shop.Shipping.Rates.parse/1` (eval question 9).

@@ -66,7 +66,9 @@ $ claude mcp remove my-app-porthole
 To let the agent trace too (who sends to a process, where time goes, why
 processes exit; see [tracing](team-setup.md#tracing)), add `--trace`:
 `mix porthole.fly.up my-app --trace`. Running `up` again without it turns
-tracing off.
+tracing off. Shapes, which show map keys (possibly personal data), need
+their own flag: `--trace-shapes` (see
+[shapes and map keys](team-setup.md#shapes-and-map-keys)).
 
 `down` asks you to type the sidecar's name, then destroys it with its
 secrets and tokens. Run `claude mcp remove` from the folder where you added

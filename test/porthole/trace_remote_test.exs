@@ -141,6 +141,7 @@ defmodule Porthole.TraceRemoteTest do
   end
 
   test "shapes are computed on a node without Porthole", %{node: node, baseline: baseline} do
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
     # httpd_util (inets) stands for application code: loaded, not refused.
     {:module, _} = :erpc.call(node, :code, :ensure_loaded, [:httpd_util])
 

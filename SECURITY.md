@@ -42,9 +42,10 @@ from intended behavior. The full discussion is in
   structure of a function's arguments and results: types and sizes in place
   of values, but **atoms and map keys as they are**. In a map keyed by data
   (emails, user ids, tokens), those keys reach the agent, and through it the
-  model provider. Values (strings, numbers) never leave the node. Servers
-  that cannot accept this set `trace_shapes: false` (`PORTHOLE_TRACE_SHAPES=false`,
-  `--no-trace-shapes`); filtering keys is planned.
+  model provider. Values (strings, numbers) never leave the node. **Shapes
+  are off unless an operator enables them** (`trace_shapes: true`,
+  `PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes`), separately from tracing,
+  and a token's policy can still turn them off; filtering keys is planned.
 - **The HTTP server authenticates every request** with a per-client bearer
   token (only its SHA-256 hash is stored, compared in constant time),
   rejects browser requests (`Origin`) and bodies over 1 MB, and refuses to

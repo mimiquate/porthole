@@ -162,6 +162,12 @@ defmodule Porthole.FlyTest do
 
     refute "PORTHOLE_TRACE=true" in Up.deploy_env("shop.internal", [])
     assert "PORTHOLE_TRACE=true" in Up.deploy_env("shop.internal", trace: true)
+    refute "PORTHOLE_TRACE_SHAPES=true" in Up.deploy_env("shop.internal", trace: true)
+
+    # Shapes only when asked for, and they imply tracing.
+    shapes = Up.deploy_env("shop.internal", trace_shapes: true)
+    assert "PORTHOLE_TRACE=true" in shapes
+    assert "PORTHOLE_TRACE_SHAPES=true" in shapes
   end
 
   test "the sidecar's Fly config travels with the code, not the checkout" do

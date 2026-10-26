@@ -19,7 +19,7 @@ defmodule PortholeSidecar.Config do
   | `PORTHOLE_CERTFILE`, `PORTHOLE_KEYFILE` | Serve HTTPS | |
   | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
   | `PORTHOLE_TRACE` | `true` lets queries trace (`Porthole.Trace`); tokens can still be denied it in their policy | off |
-  | `PORTHOLE_TRACE_SHAPES` | `false` keeps shapes out of traces (they show map keys, which can be data) | on, when tracing is |
+  | `PORTHOLE_TRACE_SHAPES` | `true` lets traces record shapes (they show map keys, which can be personal data); needs `PORTHOLE_TRACE` | off |
 
   At least one of `DNS_CLUSTER_QUERY`, `PORTHOLE_DISCOVERY` or
   `PORTHOLE_NODES` is required. The sidecar's own name and cookie come from
@@ -57,7 +57,7 @@ defmodule PortholeSidecar.Config do
   def from_env!(env \\ System.get_env()) do
     file_config = load_file(env["PORTHOLE_CONFIG"])
     if env["PORTHOLE_TRACE"] in ["true", "1"], do: Porthole.Policy.allow_tracing()
-    if env["PORTHOLE_TRACE_SHAPES"] in ["false", "0"], do: Porthole.Policy.forbid_trace_shapes()
+    if env["PORTHOLE_TRACE_SHAPES"] in ["true", "1"], do: Porthole.Policy.allow_trace_shapes()
 
     {nodes, hosts} =
       env |> Map.get("PORTHOLE_NODES", "") |> split() |> Enum.split_with(&(&1 =~ "@"))

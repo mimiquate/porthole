@@ -15,10 +15,15 @@ defmodule Porthole.PolicyTest do
     end
   end
 
-  test "shapes are allowed unless a layer turns them off" do
+  test "shapes are off unless the environment turns them on; other layers only turn them off" do
+    refute Policy.environment().trace_shapes
+    # A session or request policy does not constrain them unless it says so.
     assert Policy.new().trace_shapes
-    refute Policy.intersect(Policy.new(), Policy.new(trace_shapes: false)).trace_shapes
-    refute Policy.intersect(Policy.new(trace_shapes: false), Policy.new()).trace_shapes
+    refute Policy.intersect(Policy.environment(), Policy.new()).trace_shapes
+
+    on = struct!(Policy, trace_shapes: true)
+    assert Policy.intersect(on, Policy.new()).trace_shapes
+    refute Policy.intersect(on, Policy.new(trace_shapes: false)).trace_shapes
   end
 
   test "tiers missing from the policy are not allowed" do

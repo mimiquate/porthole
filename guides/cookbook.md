@@ -403,7 +403,8 @@ ORDER BY exits DESC;
 What a function receives and returns right now, grouped by outcome: a
 silent `{:error, …}` next to the inputs that cause it (for example, a field
 that arrives as a string instead of a number). `duration_us` is wall-clock
-time, waiting included. Shapes show map keys as they are (see
+time, waiting included. Shapes show map keys as they are, so they are off
+unless the server enables them (see
 [shapes and map keys](team-setup.md#shapes-and-map-keys)):
 
 ```sql

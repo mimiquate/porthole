@@ -14,8 +14,8 @@ defmodule Porthole.Trace do
       with the *shapes* of its arguments and result (their structure: types,
       sizes, atoms and map keys, never other values), its outcome and its
       duration, in `trace_shapes`. Map keys are shown as they are, so keys
-      that are data (emails, ids) do show: a policy can disallow shapes
-      (`trace_shapes: false`).
+      that are personal data (emails, ids) do show: shapes are off unless the
+      environment policy enables them (`trace_shapes: true`).
 
   The trace runs during the query's window (`window_ms`, required), on every
   queried node, within the policy's `max_trace_events`, and needs the

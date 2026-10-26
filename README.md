@@ -192,8 +192,9 @@ aggregates and subqueries, and the running system stays the source of truth.
   and exits keep metadata only: a message's sender and kind, never its
   contents; an exit's reason class, never its data. **Shapes show more:** the
   structure of a function's arguments and results, with their atoms and
-  **map keys as they are** (keys can be data, such as emails): a policy can
-  turn them off (`trace_shapes: false`). Off unless the server enables it.
+  **map keys as they are** (keys can be personal data, such as emails), so
+  they are off unless an operator enables them too (`trace_shapes: true`).
+  Tracing itself is off unless the server enables it.
 - **Policies** define every tier (`observe`, `trace`, `evaluate`, `mutate`)
   and compose by intersection: `config :porthole, :policy` ∩ session ∩
   request.

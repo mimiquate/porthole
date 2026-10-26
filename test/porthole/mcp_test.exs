@@ -66,7 +66,6 @@ defmodule Porthole.MCPTest do
 
     refute description =~ "trace_messages"
     assert schema.properties.trace.maxProperties == 1
-    assert Map.has_key?(schema.properties.trace.properties, :shapes)
 
     assert %{isError: true, content: [%{text: "error (not_allowed)" <> _}]} =
              query(%{
@@ -81,6 +80,21 @@ defmodule Porthole.MCPTest do
     assert %{result: %{tools: [%{description: description}]}} = call("tools/list")
     assert description =~ "trace_messages"
     assert description =~ "messages_to"
+
+    # Shapes are described only where they are enabled.
+    assert %{result: %{tools: [%{description: description, inputSchema: schema}]}} =
+             call("tools/list")
+
+    refute description =~ "trace_shapes"
+    refute Map.has_key?(schema.properties.trace.properties, :shapes)
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
+
+    assert %{result: %{tools: [%{description: description, inputSchema: schema}]}} =
+             call("tools/list")
+
+    assert description =~ "trace_shapes"
+    assert Map.has_key?(schema.properties.trace.properties, :shapes)
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
 
     Process.register(self(), :porthole_mcp_test)
 

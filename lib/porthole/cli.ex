@@ -17,8 +17,10 @@ defmodule Porthole.CLI do
       or `--trace exits=Shop.Payments.Supervisor`; implies `--allow-trace`.
     * `--allow-trace` - let queries trace (agents through `mix porthole.mcp`
       or `mix porthole.server`). Off by default.
-    * `--no-trace-shapes` - trace without shapes (`Porthole.Trace`): shapes
-      show map keys, which can be data.
+    * `--allow-trace-shapes` - also let traces record shapes
+      (`Porthole.Trace`); implies `--allow-trace`. Off by default: shapes show
+      map keys, which can be personal data. `--trace shapes=...` with
+      `mix porthole.query` asks for one explicitly, so it allows them.
     * `--demo` - start the demo app (a small shop with planted problems) first;
       from a checkout of Porthole, since the demo is not in the package
       (dev only, without `--connect`).
@@ -33,7 +35,7 @@ defmodule Porthole.CLI do
     all_supervisors: :boolean,
     trace: :string,
     allow_trace: :boolean,
-    trace_shapes: :boolean,
+    allow_trace_shapes: :boolean,
     demo: :boolean
   ]
 
@@ -83,8 +85,11 @@ defmodule Porthole.CLI do
       )
     end
 
-    if opts[:trace] || opts[:allow_trace], do: Porthole.Policy.allow_tracing()
-    if opts[:trace_shapes] == false, do: Porthole.Policy.forbid_trace_shapes()
+    if opts[:trace] || opts[:allow_trace] || opts[:allow_trace_shapes],
+      do: Porthole.Policy.allow_tracing()
+
+    if opts[:allow_trace_shapes] || String.starts_with?(opts[:trace] || "", "shapes="),
+      do: Porthole.Policy.allow_trace_shapes()
 
     {[
        nodes: nodes,

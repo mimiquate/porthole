@@ -84,7 +84,7 @@ defmodule Porthole.EvalTest do
   end
 
   test "9. which input makes a function fail silently (tracing shapes)" do
-    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
     on_exit(fn -> Application.delete_env(:porthole, :policy) end)
 
     {:ok, result} =

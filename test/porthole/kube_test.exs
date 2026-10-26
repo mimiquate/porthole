@@ -192,6 +192,21 @@ defmodule Porthole.KubeTest do
 
     [traced_container] = List.last(traced.items).spec.template.spec.containers
     assert %{value: "true"} = Enum.find(traced_container.env, &(&1.name == "PORTHOLE_TRACE"))
+    # Shapes only when asked for.
+    refute Enum.find(traced_container.env, &(&1.name == "PORTHOLE_TRACE_SHAPES"))
+
+    shaped =
+      Kube.manifest("shop-porthole", target, release,
+        tokens: "me:abc",
+        image: "img",
+        trace: true,
+        trace_shapes: true
+      )
+
+    [shaped_container] = List.last(shaped.items).spec.template.spec.containers
+
+    assert %{value: "true"} =
+             Enum.find(shaped_container.env, &(&1.name == "PORTHOLE_TRACE_SHAPES"))
   end
 
   test "reading the release leaves the cookie out when it is referenced", %{

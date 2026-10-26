@@ -159,31 +159,38 @@ defmodule Porthole.MCP do
             type: "object",
             description:
               "Trace during window_ms (required) and query the results in a trace_* table. " <>
-                "One key: messages_to, calls or exits. Only if the server enables tracing.",
-            properties: %{
-              messages_to: %{
-                type: "string",
-                description: "Registered name or pid: who sends to it (trace_messages)."
-              },
-              calls: %{
-                type: "string",
-                description:
-                  "Module or Module.function/arity of the application: calls and time " <>
-                    "per process (trace_calls)."
-              },
-              exits: %{
-                type: "string",
-                description:
-                  "Registered name or pid, e.g. a supervisor: exits of it and of the " <>
-                    "processes it starts, with reasons (trace_exits)."
-              },
-              shapes: %{
-                type: "string",
-                description:
-                  "Module.function/arity of the application: each call's argument and result " <>
-                    "shapes, outcome and duration (trace_shapes)."
+                "One key, among those below. Only if the server enables tracing.",
+            properties:
+              %{
+                messages_to: %{
+                  type: "string",
+                  description: "Registered name or pid: who sends to it (trace_messages)."
+                },
+                calls: %{
+                  type: "string",
+                  description:
+                    "Module or Module.function/arity of the application: calls and time " <>
+                      "per process (trace_calls)."
+                },
+                exits: %{
+                  type: "string",
+                  description:
+                    "Registered name or pid, e.g. a supervisor: exits of it and of the " <>
+                      "processes it starts, with reasons (trace_exits)."
+                }
               }
-            },
+              |> Map.merge(
+                if shapes?(),
+                  do: %{
+                    shapes: %{
+                      type: "string",
+                      description:
+                        "Module.function/arity of the application: each call's argument and " <>
+                          "result shapes, outcome and duration (trace_shapes)."
+                    }
+                  },
+                  else: %{}
+              ),
             minProperties: 1,
             maxProperties: 1
           }
@@ -214,19 +221,29 @@ defmodule Porthole.MCP do
       Tracing: pass `trace` (one key) with window_ms to record what happens during the window, \
       and query the matching table (join pids with processes, collected at the end of the window). \
       Use it after a snapshot points at a process or module: who floods a mailbox (messages_to), \
-      where a process spends its time (calls), why processes crash (exits), what a function \
-      receives and returns and how long it takes (shapes: silent {:error, ...} returns, a \
-      changed payload format, latency). A trace stops early \
+      where a process spends its time (calls), why processes crash (exits)#{shapes_use()}. \
+      A trace stops early \
       at its event limit (see notes). messages_to makes every message sent on the node slightly \
       slower while it runs: keep windows short (a few seconds). Read each table's limits below: \
       messages_to does not see timer messages or call replies, and trace_calls.time_us is CPU \
       time, not latency.
 
-      #{Enum.map_join(Porthole.schema(:traces), "\n", &table_description/1)}
+      #{Porthole.schema(:traces) |> Enum.reject(&(&1.name == "trace_shapes" and not shapes?())) |> Enum.map_join("\n", &table_description/1)}
       """
     else
       ""
     end
+  end
+
+  # Shapes are described to agents only where an operator turned them on.
+  defp shapes?, do: Porthole.Policy.environment().trace_shapes
+
+  defp shapes_use do
+    if shapes?(),
+      do:
+        ", what a function receives and returns and how long it takes (shapes: silent " <>
+          "{:error, ...} returns, a changed payload format, latency)",
+      else: ""
   end
 
   defp table_description(table) do

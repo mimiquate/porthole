@@ -300,7 +300,7 @@ All variables:
 | `PORTHOLE_CERTFILE` / `PORTHOLE_KEYFILE` | Serve HTTPS | |
 | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
 | `PORTHOLE_TRACE` | `true` lets agents trace (see [tracing](#tracing)) | off |
-| `PORTHOLE_TRACE_SHAPES` | `false` keeps shapes out of traces (see [shapes](#shapes-and-map-keys)) | on, when tracing is |
+| `PORTHOLE_TRACE_SHAPES` | `true` lets traces record shapes, which show map keys (see [shapes](#shapes-and-map-keys)); needs `PORTHOLE_TRACE` | off |
 | `RELEASE_NODE` / `RELEASE_DISTRIBUTION` | Override the sidecar's own name / name type | `porthole@<IP>` / `name` |
 
 The sidecar refuses to start without tokens or a place to look, and it logs
@@ -520,14 +520,19 @@ A shape replaces every value with its type and size (`binary(5)`, `float`,
 what makes a shape useful (`"rate"` became a string), and in most code they
 are names, not data.
 
-> **Warning: map keys can be data.** A map keyed by emails, user ids or
-> tokens (`%{"ann@example.com" => ...}`) shows those keys to the agent, and
+> **Warning: map keys can be personal data.** A map keyed by emails, user ids
+> or tokens (`%{"ann@example.com" => ...}`) shows those keys to the agent, and
 > through the agent to its model provider. Strings, numbers and other values
-> never leave your node, but keys do, up to 16 per map, cut at 64 bytes. If
-> that is not acceptable for your data, turn shapes off: `trace_shapes: false`
-> in the environment policy (`PORTHOLE_TRACE_SHAPES=false` for the sidecar,
-> `--no-trace-shapes` with `mix porthole.mcp` and `mix porthole.server`), or
-> in a token's policy for one client. The other traces keep working. Filtering
+> never leave your node, but keys do, up to 16 per map, cut at 64 bytes.
+>
+> **So shapes are off unless you enable them,** separately from tracing:
+> `trace_shapes: true` in the environment policy, `PORTHOLE_TRACE_SHAPES=true`
+> for the sidecar, `--trace-shapes` with `mix porthole.fly.up` and `k8s.up`, or
+> `--allow-trace-shapes` with `mix porthole.mcp` and `mix porthole.server`.
+> Enable them only for code whose maps you know are keyed by names, not data.
+> A token's policy can still turn them off for one client
+> (`policy: [trace_shapes: false]`). Until they are enabled, agents are not
+> told about them, and a request for shapes says why they are off. Filtering
 > keys that look like data is planned.
 
 Shapes trace one function at a time (`Module.fun/arity`), of your

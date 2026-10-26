@@ -41,6 +41,8 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
       Porthole.
     * `--trace` - let the agent trace (`Porthole.Trace`): who sends to a
       process, where time goes, why processes exit. Off by default.
+    * `--trace-shapes` - also let traces record shapes (implies `--trace`).
+      Off by default: shapes show map keys, which can be personal data.
 
   Set `PORTHOLE_FLY` to use a `fly` executable that is not on the `PATH`.
   """
@@ -49,7 +51,14 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
 
   alias Porthole.{Fly, Trial}
 
-  @switches [name: :string, client: :string, image: :string, build: :boolean, trace: :boolean]
+  @switches [
+    name: :string,
+    client: :string,
+    image: :string,
+    build: :boolean,
+    trace: :boolean,
+    trace_shapes: :boolean
+  ]
 
   @impl true
   def run(args) do
@@ -59,7 +68,7 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
 
       _ ->
         Mix.raise(
-          "usage: mix porthole.fly.up APP [--name NAME] [--client ID] [--image IMAGE | --build] [--trace]"
+          "usage: mix porthole.fly.up APP [--name NAME] [--client ID] [--image IMAGE | --build] [--trace] [--trace-shapes]"
         )
     end
   end
@@ -178,7 +187,8 @@ defmodule Mix.Tasks.Porthole.Fly.Up do
   @spec deploy_env(String.t(), keyword()) :: [String.t()]
   def deploy_env(dns, opts) do
     ["--env", "DNS_CLUSTER_QUERY=#{dns}", "--env", "#{Trial.trial_marker()}=true"] ++
-      if(opts[:trace], do: ["--env", "PORTHOLE_TRACE=true"], else: [])
+      if(opts[:trace] || opts[:trace_shapes], do: ["--env", "PORTHOLE_TRACE=true"], else: []) ++
+      if(opts[:trace_shapes], do: ["--env", "PORTHOLE_TRACE_SHAPES=true"], else: [])
   end
 
   @doc false
