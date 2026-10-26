@@ -29,6 +29,12 @@ defmodule Porthole.Tables.TraceCalls do
   def columns do
     [
       {:pid, :text, "Pid of the process that ran the function (join processes.pid)."},
+      {:name, :text,
+       "Its registered name, if it was still alive at the end of the window: processes " <>
+         "that exited (request processes, tasks) can no longer be asked, and are NULL here."},
+      {:initial_call, :text, "Its initial call (Mod.init/1 for a GenServer), the same way."},
+      {:started_by, :text,
+       "Who started it (as in trace_messages.sender_started_by), the same way."},
       {:function, :text, "Mod.fun/arity."},
       {:calls, :integer, "Calls during the window."},
       {:time_us, :integer,
@@ -49,8 +55,18 @@ defmodule Porthole.Tables.TraceCalls do
   @impl true
   def shape(raw) do
     rows =
-      for {pid, mfa, calls, time_us} <- Map.get(raw, :rows, []) do
-        %{pid: Remote.pid(pid), function: Term.mfa(mfa), calls: calls, time_us: time_us}
+      for {pid, mfa, calls, time_us, identity} <- Map.get(raw, :rows, []) do
+        {name, initial_call, started_by} = Porthole.Trace.identity(identity)
+
+        %{
+          pid: Remote.pid(pid),
+          name: name,
+          initial_call: initial_call,
+          started_by: started_by,
+          function: Term.mfa(mfa),
+          calls: calls,
+          time_us: time_us
+        }
       end
 
     {rows, {:trace, Map.delete(raw, :rows)}}

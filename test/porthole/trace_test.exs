@@ -273,14 +273,76 @@ defmodule Porthole.TraceTest do
 
       on_exit(fn -> Process.exit(worker, :kill) end)
 
+      Process.register(worker, :trace_test_busy_worker)
+
+      # Short-lived callers during the window: their counts are kept, but they
+      # are gone by the end, so they cannot be named.
+      spawner =
+        spawn(fn ->
+          loop = fn loop ->
+            spawn(fn -> Worker.busy(10) end)
+            Process.sleep(5)
+            loop.(loop)
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn -> Process.exit(spawner, :kill) end)
+
       {:ok, result} =
-        query("SELECT pid, function, calls, time_us FROM trace_calls",
-          trace: %{calls: "Porthole.TraceTest.Worker.busy/1"}
+        query(
+          "SELECT pid, name, function, calls, time_us FROM trace_calls ORDER BY calls DESC",
+          trace: %{calls: "Porthole.TraceTest.Worker.busy/1"},
+          window_ms: 500
         )
 
-      assert [[pid, "Porthole.TraceTest.Worker.busy/1", calls, time_us]] = result.rows
+      assert [
+               [pid, "trace_test_busy_worker", "Porthole.TraceTest.Worker.busy/1", calls, time_us]
+               | _
+             ] =
+               result.rows
+
       assert pid == Porthole.Remote.pid(worker)
       assert calls > 0 and time_us > 0
+
+      {:ok, result} =
+        query(
+          "SELECT count(*), sum(calls) FROM trace_calls WHERE name IS NULL AND initial_call IS NULL",
+          trace: %{calls: "Porthole.TraceTest.Worker.busy/1"},
+          window_ms: 500
+        )
+
+      assert [[short_lived, calls]] = result.rows
+      assert short_lived > 10
+      assert calls >= short_lived
+    end
+
+    test "stops building rows at max_rows, and says so" do
+      for _ <- 1..30 do
+        pid =
+          spawn(fn ->
+            loop = fn loop ->
+              Worker.busy(10)
+              Process.sleep(2)
+              loop.(loop)
+            end
+
+            loop.(loop)
+          end)
+
+        on_exit(fn -> Process.exit(pid, :kill) end)
+      end
+
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_calls",
+          trace: %{calls: "Porthole.TraceTest.Worker.busy/1"},
+          max_rows: 10
+        )
+
+      assert result.rows == [[10]]
+      assert result.truncated
+      assert Enum.any?(result.notes, &(&1 =~ "only the first 10 rows"))
     end
 
     test "refuses OTP and Elixir modules, and reports unknown ones" do

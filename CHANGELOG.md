@@ -27,7 +27,8 @@
   longer marks the result `truncated`.
 - Trace rows say who each process was (`sender_name`,
   `sender_initial_call` and `sender_started_by`; `name`, `initial_call` and
-  `started_by` on exits), identified on the node while the trace runs, so
+  `started_by` on exits, shapes and calls, for calls only if still alive at
+  the end of the window), identified on the node while the trace runs, so
   short-lived processes, and the tasks a LiveView or job starts, are named
   after they exit.
 - **Shapes** (`trace: {"shapes": "Module.fun/arity"}` → `trace_shapes`):

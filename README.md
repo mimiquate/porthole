@@ -148,7 +148,7 @@ server enables it; see [tracing](guides/team-setup.md#tracing)):
 | Table | One row per | Columns |
 |-------|-------------|---------|
 | `trace_messages` | message sent to a process (`messages_to`) | sender (with its name, initial call and who started it), receiver, tag (what kind of message), at_ms |
-| `trace_calls` | process and function called (`calls`) | pid, function, calls, time_us |
+| `trace_calls` | process and function called (`calls`) | pid (with its name, initial call and who started it, if still alive), function, calls, time_us |
 | `trace_exits` | exit of a process or of what it started (`exits`) | pid, name, initial_call, started_by, reason (class), location, at_ms |
 | `trace_shapes` | call to one function (`shapes`) | pid, name, initial_call, started_by, args and result *shapes*, outcome (ok/error/returned/raised), duration_us, at_ms |
 

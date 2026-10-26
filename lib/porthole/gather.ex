@@ -1029,11 +1029,78 @@ defmodule Porthole.Gather do
   everywhere, and tracing them would slow down the whole node. The session
   ends with this process, at the end of the window or when `querier` goes
   away.
+
+  Counters of processes that exited during the window are kept by the VM.
+  Rows name the processes still alive at the end (`identity`); those that
+  exited (request processes, tasks) can no longer be asked.
   """
   @spec trace_calls(pid(), pid(), tuple(), pos_integer(), pos_integer()) :: map()
   def trace_calls(_caller, querier, {modules, function, arity}, window_ms, max_rows) do
+    # One row per process and function: a module called from every request
+    # can make many. Past this, the VM kills this process (and the session
+    # goes with it); rows also stop at max_rows + 1.
+    :erlang.process_flag(:max_heap_size, %{size: 6_000_000, kill: true, error_logger: false})
     started = :erlang.monotonic_time(:nanosecond)
     querier_ref = :erlang.monitor(:process, querier)
+
+    # The same identity helpers as in trace/7 (an evaluated function cannot
+    # call another function of this module, so helpers are not shared).
+    who = fn pid ->
+      case :erlang.process_info(pid, [
+             :registered_name,
+             {:dictionary, :"$initial_call"},
+             :initial_call
+           ]) do
+        [{_, name}, {_, proc_lib_call}, {_, call}] ->
+          name = if name == [], do: nil, else: name
+          {name, if(is_tuple(proc_lib_call), do: proc_lib_call, else: call)}
+
+        _gone ->
+          nil
+      end
+    end
+
+    # Who started it: the process it works for ($callers, set by Elixir
+    # tasks: e.g. the LiveView behind a preload task), or else its parent
+    # ($ancestors, set by proc_lib); one that has exited is skipped.
+    started_by = fn callers, ancestors ->
+      heads = for list <- [callers, ancestors], is_list(list), list != [], do: hd(list)
+
+      found =
+        for candidate <- heads,
+            id =
+              (case candidate do
+                 pid when is_pid(pid) and node(pid) == node() -> who.(pid)
+                 name when is_atom(name) -> {name, nil}
+                 _other -> nil
+               end),
+            id != nil,
+            do: id
+
+      case found do
+        [id | _] -> id
+        [] -> nil
+      end
+    end
+
+    # {registered name, initial call, who started it}.
+    identity = fn pid ->
+      case :erlang.process_info(pid, [
+             :registered_name,
+             {:dictionary, :"$initial_call"},
+             :initial_call,
+             {:dictionary, :"$callers"},
+             {:dictionary, :"$ancestors"}
+           ]) do
+        [{_, name}, {_, proc_lib_call}, {_, call}, {_, callers}, {_, ancestors}] ->
+          name = if name == [], do: nil, else: name
+          call = if is_tuple(proc_lib_call), do: proc_lib_call, else: call
+          {name, call, started_by.(callers, ancestors)}
+
+        _gone ->
+          {nil, nil, nil}
+      end
+    end
 
     existing = fn text ->
       try do
@@ -1100,6 +1167,9 @@ defmodule Porthole.Gather do
               functions
             )
 
+            # The window starts once the trace is set up, as in trace/7.
+            window_started = :erlang.monotonic_time(:nanosecond)
+
             stopped =
               receive do
                 {:DOWN, ^querier_ref, _, _, _} -> :querier
@@ -1107,24 +1177,65 @@ defmodule Porthole.Gather do
                 window_ms -> :window
               end
 
-            rows =
-              for {f, a} <- functions,
-                  {:call_time, counters} <- [:trace.info(session, {module, f, a}, :call_time)],
-                  is_list(counters),
-                  {pid, count, seconds, us} <- counters,
-                  count > 0,
-                  do: {pid, {module, f, a}, count, seconds * 1_000_000 + us}
+            stopped_at = :erlang.monotonic_time(:nanosecond)
+
+            # Function by function, until max_rows + 1 (enough to say more
+            # were left out), so a module called by many processes does not
+            # build every row first.
+            limit = max_rows + 1
+
+            {rows, found} =
+              :lists.foldl(
+                fn {f, a}, {rows, count} ->
+                  case {count >= limit, :trace.info(session, {module, f, a}, :call_time)} do
+                    {false, {:call_time, counters}} when is_list(counters) ->
+                      new =
+                        for {pid, calls, seconds, us} <- counters,
+                            calls > 0,
+                            do: {pid, {module, f, a}, calls, seconds * 1_000_000 + us}
+
+                      new = :lists.sublist(new, limit - count)
+                      {new ++ rows, count + length(new)}
+
+                    _done_or_untraced ->
+                      {rows, count}
+                  end
+                end,
+                {[], 0},
+                functions
+              )
 
             :trace.session_destroy(session)
 
+            # Who each process is, asked once per process: only those still
+            # alive can answer.
+            ids =
+              :lists.foldl(
+                fn {pid, _mfa, _calls, _us}, ids ->
+                  case :maps.is_key(pid, ids) do
+                    true -> ids
+                    false -> :maps.put(pid, identity.(pid), ids)
+                  end
+                end,
+                %{},
+                rows
+              )
+
+            rows =
+              :lists.map(
+                fn {pid, mfa, calls, us} -> {pid, mfa, calls, us, :maps.get(pid, ids)} end,
+                :lists.sublist(rows, max_rows)
+              )
+
             %{
               status: :ok,
-              rows: :lists.sublist(rows, max_rows),
-              truncated: length(rows) > max_rows,
+              rows: rows,
+              truncated: found > max_rows,
               stopped: stopped,
               events: 0,
               read: :all,
-              elapsed_ms: div(:erlang.monotonic_time(:nanosecond) - started, 1_000_000)
+              elapsed_ms: div(stopped_at - window_started, 1_000_000),
+              setup_ms: div(window_started - started, 1_000_000)
             }
         end
     end

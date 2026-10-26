@@ -136,6 +136,13 @@ when a real question needs it.
     time, checked after `read`. Times (`at_ms`, `elapsed_ms`) are from the window's start,
     after setup. `max_concurrent_traces` (1) in the policy and `Porthole.Limiter`: up to
     `max_concurrent` traces could run on a node, each with its own 24 MB and setup.
+  - `trace_calls/5` review (2026-10-26): `call_time` keeps the counters of processes that
+    exited during the window (checked: 100 short-lived callers, all counted), so calls
+    are not under-reported; but rows were unbounded before the cut to `max_rows` (one per
+    process × function) and the process had no heap cap: now the 48 MB cap and a fold that
+    stops at `max_rows + 1`. Rows name processes still alive at the end (helpers copied
+    from `trace/7`, since evaluated functions cannot share them); times from the window's
+    start.
   - Flags set on every process (`flag_all`) belong to the session and are removed with it,
     including the default for new processes: checked with `trace:session_info(Pid)` before,
     during and after each kind (2026-10-26), and guarded by a remote test.
