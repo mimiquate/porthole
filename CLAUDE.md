@@ -115,6 +115,11 @@ when a real question needs it.
     ns with call events, bounded by the event limit (5,000 calls); evaluated shapes cost
     1–41 µs per term. `{message, false}` in a match spec suppresses the call event but
     keeps return/exception events. Demo: `Shop.Shipping.Rates.parse/1` (eval question 9).
+    Review findings: sorting a map's keys to take 16 cost 64 ms for 100k keys, per call
+    (now `:maps.iterator`/`next`, ~2 ms; maps of up to 32 keys still come sorted); call
+    events copy the arguments, so a function called often with MB-sized arguments gets its
+    tracer killed at the heap cap (by design): the collector now explains `:killed` instead
+    of "collection failed: :killed".
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox

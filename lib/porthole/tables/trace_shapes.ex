@@ -5,8 +5,9 @@ defmodule Porthole.Tables.TraceShapes do
 
   A shape is a term's structure without its values: types and sizes
   (`binary(5)`, `list(20) of %{...}`), atoms (`:ok`, `:error`,
-  `:invalid_format`) and map keys. **Map keys are shown as they are**: in a
-  map keyed by data (emails, user ids, tokens), those keys reach the agent.
+  `:invalid_format`) and map keys. **Map keys are shown as they are**, string,
+  atom and integer ones alike (up to 16 per map): in a map keyed by data
+  (emails, user ids, tokens), those keys reach the agent.
   A policy can disallow shapes (`trace_shapes: false`).
   """
 

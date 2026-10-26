@@ -242,6 +242,14 @@ defmodule Porthole.Collector do
 
   defp describe(:caller_timeout, _timeout), do: "collection timed out"
 
+  # Only a trace's process has a heap cap (Porthole.Gather.trace/7): its
+  # events are copies of what it traces.
+  defp describe(:killed, _timeout),
+    do:
+      "the trace was stopped on this node: its events held more memory than a trace may " <>
+        "use (they copy what they trace: large messages or arguments, often). Trace " <>
+        "something that handles smaller data, or use a shorter window"
+
   defp describe({:old_otp, release}, _),
     do: "Porthole needs OTP 27+, this node runs OTP #{release}"
 

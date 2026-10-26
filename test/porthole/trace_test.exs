@@ -354,6 +354,7 @@ defmodule Porthole.TraceTest do
     @moduledoc false
     def parse(%{"rate" => rate}) when is_number(rate), do: {:ok, rate}
     def parse(%{"rate" => _}), do: {:error, :invalid_rate}
+    def parse(map) when is_map(map), do: {:error, :invalid_payload}
     def parse(:boom), do: raise(ArgumentError, "secret detail 4242")
   end
 
@@ -406,12 +407,63 @@ defmodule Porthole.TraceTest do
       refute inspect(result) =~ "13.10"
       refute inspect(result) =~ "secret"
 
+      # A large map: 16 of its keys, without listing them all.
+      big = Map.new(1..2_000, &{&1, &1})
+
+      big_caller =
+        spawn(fn ->
+          loop = fn loop ->
+            Parser.parse(big)
+            Process.sleep(5)
+            loop.(loop)
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn -> Process.exit(big_caller, :kill) end)
+
+      {:ok, result} =
+        query("SELECT args FROM trace_shapes WHERE args LIKE '%1984 more%' LIMIT 1",
+          trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
+        )
+
+      assert [[args]] = result.rows
+      assert args =~ "… (1984 more)"
+
       {:ok, result} =
         query("SELECT count(*) FROM trace_shapes WHERE duration_us IS NULL OR duration_us < 0",
           trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
         )
 
       assert result.rows == [[0]]
+    end
+
+    test "huge arguments, often, stop the trace at its memory cap, with a clear error" do
+      # Each call event copies its arguments: a few of these exceed the cap.
+      huge = Map.new(1..200_000, &{&1, &1})
+
+      huge_caller =
+        spawn(fn ->
+          loop = fn loop ->
+            Parser.parse(huge)
+            Process.sleep(5)
+            loop.(loop)
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn -> Process.exit(huge_caller, :kill) end)
+
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_shapes",
+          trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
+        )
+
+      assert [%{message: message}] = result.errors
+      assert message =~ "held more memory than a trace may use"
+      assert length(:trace.session_info(:all)) == 1
     end
 
     test "shapes are off unless enabled; they need one function, of the application" do

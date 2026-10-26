@@ -40,8 +40,9 @@ from intended behavior. The full discussion is in
   message contents, arguments or state.
 - **Shapes are the exception, by design.** A `shapes` trace records the
   structure of a function's arguments and results: types and sizes in place
-  of values, but **atoms and map keys as they are**. In a map keyed by data
-  (emails, user ids, tokens), those keys reach the agent, and through it the
+  of values, but **atoms and map keys as they are** (string, atom and integer
+  keys alike). In a map keyed by data (emails, user ids, tokens), those keys
+  reach the agent, and through it the
   model provider. Values (strings, numbers) never leave the node. **Shapes
   are off unless an operator enables them** (`trace_shapes: true`,
   `PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes`), separately from tracing,

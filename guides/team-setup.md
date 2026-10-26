@@ -521,9 +521,11 @@ what makes a shape useful (`"rate"` became a string), and in most code they
 are names, not data.
 
 > **Warning: map keys can be personal data.** A map keyed by emails, user ids
-> or tokens (`%{"ann@example.com" => ...}`) shows those keys to the agent, and
-> through the agent to its model provider. Strings, numbers and other values
-> never leave your node, but keys do, up to 16 per map, cut at 64 bytes.
+> or tokens (`%{"ann@example.com" => ...}`, `%{4821 => ...}`) shows those keys
+> to the agent, and through the agent to its model provider: string, atom
+> **and integer** keys alike. Strings, numbers and other values never leave
+> your node, but keys do: up to 16 per map (sorted for maps of up to 32 keys,
+> in no particular order for larger ones), cut at 64 bytes.
 >
 > **So shapes are off unless you enable them,** separately from tracing:
 > `trace_shapes: true` in the environment policy, `PORTHOLE_TRACE_SHAPES=true`
@@ -536,7 +538,11 @@ are names, not data.
 > keys that look like data is planned.
 
 Shapes trace one function at a time (`Module.fun/arity`), of your
-application, never of OTP or Elixir.
+application, never of OTP or Elixir. Each call's event copies its arguments
+into the tracing process, under its memory cap: a function called often with
+very large arguments (megabytes, such as a big cache or state) stops the
+trace at that cap, and the agent is told so. Pick a function that handles
+the payload rather than the whole state.
 
 #### How a trace is bounded
 

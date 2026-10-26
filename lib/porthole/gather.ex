@@ -551,6 +551,26 @@ defmodule Porthole.Gather do
       )
     end
 
+    # Up to 16 keys of a map, without listing (or sorting) all of them: a map
+    # can hold millions (sorting 100k keys took 64 ms, per call). Maps of up
+    # to 32 keys are stored in key order, so theirs come sorted.
+    first_keys = fn map ->
+      take = fn take, iterator, n, acc ->
+        case n do
+          0 ->
+            :lists.reverse(acc)
+
+          _ ->
+            case :maps.next(iterator) do
+              {key, _value, next} -> take.(take, next, n - 1, [key | acc])
+              :none -> :lists.reverse(acc)
+            end
+        end
+      end
+
+      take.(take, :maps.iterator(map), 16, [])
+    end
+
     # The shape of a term: its structure without its values. Atoms and map
     # keys are kept (they are names, not data, in most code: see the docs'
     # warning), everything else becomes its type and size. Bounded in depth
@@ -594,13 +614,13 @@ defmodule Porthole.Gather do
 
       shape, %{__struct__: struct} = map, depth when is_atom(struct) ->
         fields = :maps.remove(:__struct__, map)
-        keys = :lists.sublist(:lists.sort(:maps.keys(fields)), 16)
+        keys = first_keys.(fields)
 
         {:struct, struct, map_size(fields),
          :lists.map(fn k -> {k, shape.(shape, :maps.get(k, fields), depth + 1)} end, keys)}
 
       shape, map, depth when is_map(map) ->
-        keys = :lists.sublist(:lists.sort(:maps.keys(map)), 16)
+        keys = first_keys.(map)
 
         # Keys as they are (binaries cut to 64 bytes), other key terms as
         # their shape.
