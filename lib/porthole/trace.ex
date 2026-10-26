@@ -46,13 +46,19 @@ defmodule Porthole.Trace do
            ~s({"exits": "<registered name or pid>"}, {"shapes": "<Module.function/arity>"})
 
   @doc """
-  Validates a trace option (a map or keyword list with one key).
+  Validates a trace option (a map or keyword list with one key). Targets
+  are text, as agents send them; Elixir callers may also pass a module or
+  registered name (an atom), a pid, or for `calls` and `shapes` a
+  `{module, function, arity}` tuple.
 
       iex> Porthole.Trace.parse(%{"messages_to" => "Shop.Notifications"})
       {:ok, {:messages_to, {:name, ["Elixir.Shop.Notifications", "Shop.Notifications"]}}}
 
       iex> Porthole.Trace.parse(calls: "Shop.Pricing.quote/1")
       {:ok, {:calls, {["Elixir.Shop.Pricing", "Shop.Pricing"], "quote", 1}}}
+
+      iex> Porthole.Trace.parse(shapes: {Shop.Pricing, :quote, 1})
+      {:ok, {:shapes, {["Elixir.Shop.Pricing", "Shop.Pricing"], "quote", 1}}}
 
   """
   @spec parse(map() | keyword() | nil) :: {:ok, t() | nil} | {:error, Error.t()}
@@ -62,10 +68,11 @@ defmodule Porthole.Trace do
     pairs = if is_map(spec), do: Map.to_list(spec), else: spec
 
     case pairs do
-      [{kind, value}] when is_binary(value) ->
-        case Map.fetch(@kinds, to_string(kind)) do
-          {:ok, kind} -> parse(kind, String.trim(value))
-          :error -> bad_request(@usage)
+      [{kind, value}] ->
+        case {Map.fetch(@kinds, to_string(kind)), text(value)} do
+          {{:ok, _kind}, nil} -> bad_request(@usage)
+          {{:ok, kind}, text} -> parse(kind, text)
+          {:error, _text} -> bad_request(@usage)
         end
 
       _other ->
@@ -77,6 +84,30 @@ defmodule Porthole.Trace do
   end
 
   def parse(_other), do: bad_request(@usage)
+
+  # A target as text: as sent (agents), or written from an Elixir value
+  # (library callers), as the processes table renders it.
+  defp text(value) when is_binary(value), do: String.trim(value)
+  defp text(pid) when is_pid(pid), do: Porthole.Remote.pid(pid)
+
+  defp text(atom) when is_atom(atom) and atom not in [nil, true, false] do
+    case Atom.to_string(atom) do
+      "Elixir." <> module -> module
+      name -> ":" <> name
+    end
+  end
+
+  defp text({module, function, arity})
+       when is_atom(module) and is_atom(function) and is_integer(arity),
+       do: "#{text(module)}.#{function}/#{arity}"
+
+  defp text(_other), do: nil
+
+  # Names are atoms, at most 255 characters; Module.function/arity, two.
+  @max_target 2 * 255 + 6
+
+  defp parse(_kind, text) when byte_size(text) > @max_target,
+    do: bad_request("the trace's target is too long (#{byte_size(text)} bytes): names are atoms")
 
   defp parse(:calls, text) do
     case Regex.run(~r/^(:?)([\w.]+?)(?:\.([a-z_]\w*[?!]?)\/(\d{1,3}))?$/, text) do
@@ -283,7 +314,7 @@ defmodule Porthole.Trace do
   and sizes in place of values.
 
       iex> Porthole.Trace.render_shape({:tuple, [{:atom, :ok}, {:map, 2, [{"amount", {:binary, 5}}, {"currency", {:binary, 3}}]}]})
-      ~s({:ok, %{"amount" => binary(5), "currency" => binary(3)}})
+      ~s|{:ok, %{"amount" => binary(5), "currency" => binary(3)}}|
 
   """
   @spec render_shape(term()) :: String.t()

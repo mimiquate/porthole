@@ -17,7 +17,10 @@ defmodule Porthole.Tables.TraceCalls do
     do:
       ~s(With trace {"calls": "<Module or Module.function/arity>"}: one row per process ) <>
         "and function called during the window, with how often and how long. Answers " <>
-        "where a process spends its time and who calls a function."
+        "where a process spends its time and which processes run a function. The row's " <>
+        "process is the one running the function: for a GenServer's callbacks " <>
+        "(handle_call/3...), the server itself, not its callers (trace messages_to on the " <>
+        "server to see who calls it)."
 
   @impl true
   def key, do: :pid

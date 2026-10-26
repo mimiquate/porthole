@@ -1,5 +1,6 @@
 defmodule Porthole.TraceTest do
   use ExUnit.Case, async: false
+  doctest Porthole.Trace
 
   alias Porthole.Error
 
@@ -524,11 +525,20 @@ defmodule Porthole.TraceTest do
           window_ms: 5_000
         )
 
-      assert result.errors == []
-      assert [[calls]] = result.rows
-      assert calls > 0
-      assert Enum.any?(result.notes, &(&1 =~ "reached the memory a trace may hold"))
-      assert result.truncated
+      # Usually the watchdog stops the trace and keeps what came; when a few
+      # multi-MB events are read close together, the heap cap (the backstop)
+      # stops it first. Either way the outcome is explained, and nothing stays.
+      case result.errors do
+        [] ->
+          assert [[calls]] = result.rows
+          assert calls > 0
+          assert Enum.any?(result.notes, &(&1 =~ "reached the memory a trace may hold"))
+          assert result.truncated
+
+        [%{message: message}] ->
+          assert message =~ "grew past the memory a trace may use"
+      end
+
       assert length(:trace.session_info(:all)) == 1
     end
 
@@ -644,6 +654,35 @@ defmodule Porthole.TraceTest do
                query("SELECT * FROM trace_messages", trace: %{messages_to: "x"})
     end
 
+    test "Elixir callers can pass modules, names, pids and {module, function, arity}" do
+      alias Porthole.Trace
+
+      assert {:ok, {:messages_to, {:name, ["Elixir.Shop.Cart", "Shop.Cart"]}}} =
+               Trace.parse(messages_to: Shop.Cart)
+
+      assert {:ok, {:exits, {:name, ["Elixir.logger", "logger"]}}} =
+               Trace.parse(exits: :logger)
+
+      assert {:ok, {:messages_to, {:pid, pid}}} = Trace.parse(messages_to: self())
+      assert to_string(pid) == String.trim_leading(Porthole.Remote.pid(self()), "#PID")
+
+      assert {:ok, {:calls, {["lists"], "map", 2}}} = Trace.parse(calls: {:lists, :map, 2})
+
+      assert {:ok, {:calls, {["Elixir.Shop.Pricing", "Shop.Pricing"], nil, nil}}} =
+               Trace.parse(calls: Shop.Pricing)
+
+      # And they work end to end.
+      start_supervised!({Inbox, :trace_test_by_atom})
+      sender(:trace_test_by_atom, :tick, 5)
+
+      assert {:ok, %{rows: [[count]]}} =
+               query("SELECT count(*) FROM trace_messages",
+                 trace: [messages_to: :trace_test_by_atom]
+               )
+
+      assert count > 0
+    end
+
     test "rejects malformed traces" do
       for trace <- [
             %{},
@@ -652,6 +691,10 @@ defmodule Porthole.TraceTest do
             %{"messages_to" => 1},
             %{"messages_to" => "a b"},
             %{"calls" => "Mod.fun"},
+            %{"messages_to" => String.duplicate("a", 600)},
+            %{"messages_to" => nil},
+            %{"messages_to" => true},
+            [calls: {"Mod", :f, 1}],
             "messages_to",
             [1, 2]
           ] do

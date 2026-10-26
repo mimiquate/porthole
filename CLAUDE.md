@@ -147,6 +147,14 @@ when a real question needs it.
     tracing and shapes from the environment policy alone, so a token without them was still
     told about them (then refused). The description and the `trace` argument now follow the
     client's effective policy (environment ∩ token).
+  - Parsing and agent-text review (2026-10-26): targets capped at 516 bytes (names are
+    atoms); Elixir callers may pass modules, names, pids and `{m, f, a}` (agents send text);
+    the tool description states the 10 s window, the memory limit, one trace at a time, and
+    that exited processes are identified by the rows' columns, not by joining `processes`;
+    `trace_calls` says its process is the one *running* the function (a GenServer's callbacks:
+    the server). `Porthole.Trace`'s doctests were never run (one was broken): now they are.
+    With multi-MB arguments every few ms, either the watchdog stops the trace (rows kept) or
+    the 48 MB heap cap kills it first (several large events read between GCs): both explained.
   - Flags set on every process (`flag_all`) belong to the session and are removed with it,
     including the default for new processes: checked with `trace:session_info(Pid)` before,
     during and after each kind (2026-10-26), and guarded by a remote test.
