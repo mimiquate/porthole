@@ -603,7 +603,18 @@ defmodule Porthole.Gather do
                     (name != [] and :lists.member(name, ancestors)),
                   do: pid
 
-            :lists.foreach(fn pid -> :trace.process(session, pid, true, flags) end, [root | pids])
+            # A process may exit between the listing and its flagging.
+            :lists.foreach(
+              fn pid ->
+                try do
+                  :trace.process(session, pid, true, flags)
+                catch
+                  :error, _ -> 0
+                end
+              end,
+              [root | pids]
+            )
+
             :maps.from_list(:lists.map(fn pid -> {pid, identity.(pid)} end, [root | pids]))
           end
 
