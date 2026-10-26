@@ -214,9 +214,9 @@ defmodule Porthole.Trace do
               {:cut,
                "the trace stopped after #{Enum.min([raw.elapsed_ms, window_ms])} ms of the " <>
                  "#{window_ms} ms window: its events reached the memory a trace may hold " <>
-                 "(they copy what they trace: large messages or arguments). The rows are a " <>
-                 "sample of that time; a shorter window, or a function or process handling " <>
-                 "smaller data, covers more"},
+                 "(they copy what they trace: large messages or arguments). The rows cover " <>
+                 "only that time; a function or process that handles smaller data covers " <>
+                 "more"},
             else: []
           ),
           if(raw.read == :deadline,

@@ -130,6 +130,12 @@ when a real question needs it.
     backstop. After: hot loop ~4,900 calls in 1.8–2.8 s; 500 calls/s all of them (~1,600 in
     5 s); saturated 800–1,100 calls with the too-busy note, ~13 s; +2.2–3.7 µs per traced
     call with that payload; node memory +15–36 MB at peak; no session left.
+  - Review of the memory handling (2026-10-26): the watchdog's message waits behind the
+    backlog, so a slow tracer reached the window's end first and reported `:window`, losing
+    why the trace was cut and overstating coverage; the watchdog now sends its reason and
+    time, checked after `read`. Times (`at_ms`, `elapsed_ms`) are from the window's start,
+    after setup. `max_concurrent_traces` (1) in the policy and `Porthole.Limiter`: up to
+    `max_concurrent` traces could run on a node, each with its own 24 MB and setup.
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox

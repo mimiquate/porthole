@@ -46,7 +46,7 @@ defmodule Porthole.Tables.TraceExits do
        "Class of the exit reason: normal, shutdown, killed, an exception (FunctionClauseError, " <>
          "MatchError) or another error atom (timeout, noproc). Never the reason's data."},
       {:location, :text, "Mod.fun/arity where it was raised, when known."},
-      {:at_ms, :integer, "When it exited, in ms since the trace started."}
+      {:at_ms, :integer, "When it exited, in ms since the window started."}
     ]
   end
 
@@ -66,7 +66,9 @@ defmodule Porthole.Tables.TraceExits do
           started_by: started_by,
           reason: Porthole.Trace.exception_name(reason),
           location: Term.mfa(location),
-          at_ms: at_ms
+          # Events are timed from the start of the function; the window
+          # starts after setup.
+          at_ms: max(at_ms - Map.get(raw, :setup_ms, 0), 0)
         }
       end
 

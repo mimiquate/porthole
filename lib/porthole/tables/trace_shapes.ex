@@ -52,7 +52,7 @@ defmodule Porthole.Tables.TraceShapes do
       {:duration_us, :integer,
        "Wall-clock time from call to return, in µs, waiting included (database, other " <>
          "processes): latency, unlike trace_calls.time_us. NULL if called before the trace."},
-      {:at_ms, :integer, "When it returned, in ms since the trace started."}
+      {:at_ms, :integer, "When it returned, in ms since the window started."}
     ]
   end
 
@@ -85,7 +85,9 @@ defmodule Porthole.Tables.TraceShapes do
           outcome: outcome,
           result: result,
           duration_us: duration_us,
-          at_ms: at_ms
+          # Events are timed from the start of the function; the window
+          # starts after setup.
+          at_ms: max(at_ms - Map.get(raw, :setup_ms, 0), 0)
         }
       end
 

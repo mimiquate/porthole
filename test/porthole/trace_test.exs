@@ -514,6 +514,40 @@ defmodule Porthole.TraceTest do
     end
   end
 
+  describe "concurrency" do
+    test "one trace at a time; queries without a trace still run" do
+      start_supervised!({Inbox, :trace_test_busy})
+      sender(:trace_test_busy, :tick, 5)
+
+      first =
+        Task.async(fn ->
+          query("SELECT count(*) FROM trace_messages",
+            trace: %{messages_to: "trace_test_busy"},
+            window_ms: 1_000
+          )
+        end)
+
+      # Until the first trace holds its slot.
+      Process.sleep(200)
+
+      assert {:error, %Error{reason: :busy, message: message}} =
+               query("SELECT count(*) FROM trace_messages",
+                 trace: %{messages_to: "trace_test_busy"}
+               )
+
+      assert message =~ "a trace is already running"
+      assert {:ok, _} = Porthole.query("SELECT count(*) FROM system")
+      assert {:ok, %{rows: [[count]]}} = Task.await(first, 10_000)
+      assert count > 0
+
+      # Once it ended, the next trace runs.
+      assert {:ok, _} =
+               query("SELECT count(*) FROM trace_messages",
+                 trace: %{messages_to: "trace_test_busy"}
+               )
+    end
+  end
+
   describe "validation" do
     test "needs a window, the trace tier and a matching table" do
       assert {:error, %Error{reason: :window_required}} =

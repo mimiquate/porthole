@@ -50,6 +50,9 @@ defmodule Porthole.Policy do
     environment enables it** (`trace_shapes: true`): shapes show map keys as
     they are, and keys can be personal data (emails, ids). A session or
     request can turn it off, never on.
+  * `:max_concurrent_traces` - queries with a trace running at the same
+    time, across all clients (default 1): each trace has its own limits on
+    every node it runs on, so this bounds their sum.
   * `:max_trace_window_ms` - longest window for a trace. Lower than
     `:max_window_ms`: a sampling window costs nothing while it waits, a trace
     costs for as long as it runs.
@@ -70,6 +73,7 @@ defmodule Porthole.Policy do
           max_concurrent: limit(),
           max_trace_events: limit(),
           max_trace_window_ms: limit(),
+          max_concurrent_traces: limit(),
           trace_shapes: boolean()
         }
 
@@ -84,6 +88,7 @@ defmodule Porthole.Policy do
             max_concurrent: 4,
             max_trace_events: 10_000,
             max_trace_window_ms: 10_000,
+            max_concurrent_traces: 1,
             trace_shapes: false
 
   @limits [
@@ -95,7 +100,8 @@ defmodule Porthole.Policy do
     :queries_per_minute,
     :max_concurrent,
     :max_trace_events,
-    :max_trace_window_ms
+    :max_trace_window_ms,
+    :max_concurrent_traces
   ]
 
   @doc "All tiers, least to most powerful."

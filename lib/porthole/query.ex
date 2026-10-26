@@ -92,7 +92,7 @@ defmodule Porthole.Query do
          {:ok, nodes} <- only(nodes, opts[:only_nodes], opts[:nodes]),
          :ok <- check_trace_nodes(trace, nodes),
          :ok <- Policy.authorize_nodes(policy, nodes),
-         {:ok, ticket} <- Limiter.acquire(opts[:client], policy) do
+         {:ok, ticket} <- Limiter.acquire(opts[:client], policy, trace != nil) do
       try do
         run_admitted(sql, nodes, window, policy, opts[:all_supervisors] == true, trace)
       after

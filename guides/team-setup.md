@@ -428,7 +428,8 @@ config :porthole, :policy,
   queries_per_minute: 60,    # per client (token)
   max_concurrent: 4,         # queries running at once, across all clients
   max_trace_events: 10_000,  # events one trace may produce per node
-  max_trace_window_ms: 10_000  # longest trace (tracing costs while it runs)
+  max_trace_window_ms: 10_000, # longest trace (tracing costs while it runs)
+  max_concurrent_traces: 1     # traces running at once, across all clients
 ```
 
 The values above are the defaults. A token's `policy:` can lower any of them
@@ -564,8 +565,15 @@ connection to the sidecar drops; it also stops itself:
   above the default (~100,000 and more) a flood can fill that cap, in which
   case the trace returns nothing;
 - **at a memory limit**: events copy what they trace (messages,
-  arguments), so the watchdog also stops the trace when they hold 24 MB,
-  keeping what came, with a note; past 48 MB of heap the VM itself stops it;
+  arguments; large binaries are shared, not copied), so the watchdog also
+  stops the trace when they hold 24 MB, keeping what came, with a note; past
+  48 MB of heap the VM itself stops it. A single very large message or
+  argument is copied before anything can react: memory can briefly exceed the
+  limit by that much;
+- **one at a time** (`max_concurrent_traces`, 1 by default): a second
+  tracing query waits for the first to end (it gets a `busy` error with a
+  retry hint), so the cost on a node is at most one trace's, whatever the
+  number of agents;
 - **within the deadline**: on a busy node the trace (at low priority, like
   all collection) reads its events slowly; what it has not read when its time
   is up is left out, and `notes` says so, instead of the query failing.

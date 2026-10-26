@@ -877,13 +877,15 @@ defmodule Porthole.Gather do
           after
             1 ->
               case :erlang.process_info(me, [:message_queue_len, :memory]) do
+                # With the time it stopped the trace: its message waits
+                # behind the backlog, which the tracer may read much later.
                 [{_, queued}, _] when queued >= max_events ->
                   :trace.session_destroy(session)
-                  send(me, {:porthole_watchdog, :events})
+                  send(me, {:porthole_watchdog, :events, :erlang.monotonic_time(:nanosecond)})
 
                 [_, {_, bytes}] when bytes >= 25_165_824 ->
                   :trace.session_destroy(session)
-                  send(me, {:porthole_watchdog, :memory})
+                  send(me, {:porthole_watchdog, :memory, :erlang.monotonic_time(:nanosecond)})
 
                 _other ->
                   watch.(watch)
@@ -927,8 +929,8 @@ defmodule Porthole.Gather do
               end
           end
 
-        {:porthole_watchdog, why} ->
-          {why, rows, count, known}
+        {:porthole_watchdog, why, at} ->
+          {{:watchdog, why, at}, rows, count, known}
 
         {:DOWN, ^querier_ref, _, _, _} ->
           {:querier, rows, count, known}
@@ -974,12 +976,31 @@ defmodule Porthole.Gather do
         known = enable.(session)
         dog = watchdog.(session)
         # The window starts once the trace is set up (flagging every process
-        # takes a while on a large node).
-        window_end = :erlang.monotonic_time(:millisecond) + window_ms
+        # takes a while on a large node); times are reported from its start.
+        window_started = :erlang.monotonic_time(:nanosecond)
+        window_end = div(window_started, 1_000_000) + window_ms
         {stopped, rows, count, known} = read.(read, keep, window_end, [], 0, known)
         :trace.session_destroy(session)
         send(dog, :porthole_stop)
-        elapsed_ms = div(:erlang.monotonic_time(:nanosecond) - started, 1_000_000)
+
+        # The watchdog may have stopped the trace while the tracer was behind
+        # (its message then waits behind events read later): its reason and
+        # time win, so the agent knows what was cut and when.
+        {stopped, stopped_at} =
+          case stopped do
+            {:watchdog, why, at} ->
+              {why, at}
+
+            _ ->
+              receive do
+                {:porthole_watchdog, why, at} -> {why, at}
+              after
+                0 -> {stopped, :erlang.monotonic_time(:nanosecond)}
+              end
+          end
+
+        elapsed_ms = div(stopped_at - window_started, 1_000_000)
+        setup_ms = div(window_started - started, 1_000_000)
         until = :erlang.monotonic_time(:millisecond) + read_ms
         {rows, count, read} = drain.(drain, keep, until, rows, count, known)
         rows = :lists.reverse(rows)
@@ -991,7 +1012,8 @@ defmodule Porthole.Gather do
           stopped: stopped,
           events: count,
           read: read,
-          elapsed_ms: elapsed_ms
+          elapsed_ms: elapsed_ms,
+          setup_ms: setup_ms
         }
     end
   end

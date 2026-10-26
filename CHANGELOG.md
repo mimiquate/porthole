@@ -18,7 +18,8 @@
   `--allow-trace` (`mcp`, `server`). Each trace runs in an OTP trace session
   that the VM removes when it ends (including when the query is abandoned or
   the connection drops), stops gracefully when its events hold 24 MB (they
-  copy what they trace), lasts at most `max_trace_window_ms` (10 s, new
+  copy what they trace), runs one at a time (`max_concurrent_traces`, new
+  policy limit), lasts at most `max_trace_window_ms` (10 s, new
   policy limit), stops at `max_trace_events` (10,000 per node, new policy
   limit) counted as events are produced, and on a busy node returns the
   events it could read with a note instead of timing out.

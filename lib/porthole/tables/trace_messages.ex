@@ -47,7 +47,7 @@ defmodule Porthole.Tables.TraceMessages do
       {:tag, :text,
        "Kind of message: its first element (order_event), a struct's name, or call:<tag> / " <>
          "cast:<tag> for GenServer requests; NULL if none. Nothing else of the message is kept."},
-      {:at_ms, :integer, "When it was sent, in ms since the trace started."}
+      {:at_ms, :integer, "When it was sent, in ms since the window started."}
     ]
   end
 
@@ -77,7 +77,9 @@ defmodule Porthole.Tables.TraceMessages do
           sender_started_by: started_by,
           receiver: Remote.pid(receiver),
           tag: tag(tag),
-          at_ms: at_ms
+          # Events are timed from the start of the function; the window
+          # starts after setup.
+          at_ms: max(at_ms - Map.get(raw, :setup_ms, 0), 0)
         }
       end
 
