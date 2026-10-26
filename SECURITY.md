@@ -35,9 +35,16 @@ from intended behavior. The full discussion is in
   server enables it. A trace targets what the agent names (never a whole
   module of OTP or Elixir), stops at an event limit counted as the VM
   produces events, and runs in an OTP trace session the VM removes when the
-  trace ends for any reason. It keeps metadata only: a message's sender and
-  kind, an exit's reason class and location, never message contents,
-  arguments or state.
+  trace ends for any reason. Message and exit traces keep metadata only: a
+  message's sender and kind, an exit's reason class and location, never
+  message contents, arguments or state.
+- **Shapes are the exception, by design.** A `shapes` trace records the
+  structure of a function's arguments and results: types and sizes in place
+  of values, but **atoms and map keys as they are**. In a map keyed by data
+  (emails, user ids, tokens), those keys reach the agent, and through it the
+  model provider. Values (strings, numbers) never leave the node. Servers
+  that cannot accept this set `trace_shapes: false` (`PORTHOLE_TRACE_SHAPES=false`,
+  `--no-trace-shapes`); filtering keys is planned.
 - **The HTTP server authenticates every request** with a per-client bearer
   token (only its SHA-256 hash is stored, compared in constant time),
   rejects browser requests (`Origin`) and bodies over 1 MB, and refuses to

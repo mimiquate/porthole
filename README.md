@@ -150,6 +150,7 @@ server enables it; see [tracing](guides/team-setup.md#tracing)):
 | `trace_messages` | message sent to a process (`messages_to`) | sender (with its name, initial call and who started it), receiver, tag (what kind of message), at_ms |
 | `trace_calls` | process and function called (`calls`) | pid, function, calls, time_us |
 | `trace_exits` | exit of a process or of what it started (`exits`) | pid, name, initial_call, started_by, reason (class), location, at_ms |
+| `trace_shapes` | call to one function (`shapes`) | pid, name, initial_call, started_by, args and result *shapes*, outcome (ok/error/returned/raised), duration_us, at_ms |
 
 Every table has a `node` column. With a window, `processes` gains
 `reductions_delta`, `memory_delta`, `message_queue_len_delta` and
@@ -187,9 +188,12 @@ aggregates and subqueries, and the running system stays the source of truth.
   token carries its own policy, and removing it revokes access.
 - **Traces are bounded too.** A trace runs in an OTP trace session that the
   VM removes as soon as it ends (window over, query abandoned, connection
-  lost), stops at an event limit counted as events are produced, and keeps
-  metadata only: a message's sender and kind, never its contents; an exit's
-  reason class, never its data. Off unless the server enables it.
+  lost), and stops at an event limit counted as events are produced. Messages
+  and exits keep metadata only: a message's sender and kind, never its
+  contents; an exit's reason class, never its data. **Shapes show more:** the
+  structure of a function's arguments and results, with their atoms and
+  **map keys as they are** (keys can be data, such as emails): a policy can
+  turn them off (`trace_shapes: false`). Off unless the server enables it.
 - **Policies** define every tier (`observe`, `trace`, `evaluate`, `mutate`)
   and compose by intersection: `config :porthole, :policy` ∩ session ∩
   request.

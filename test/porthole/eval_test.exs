@@ -83,6 +83,21 @@ defmodule Porthole.EvalTest do
     assert %{"sender" => "Shop.Orders.EventRelay", "tag" => "order_event"} = top
   end
 
+  test "9. which input makes a function fail silently (tracing shapes)" do
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    {:ok, result} =
+      Porthole.query(
+        "SELECT DISTINCT args, result FROM trace_shapes WHERE outcome = 'error'",
+        window_ms: 300,
+        trace: %{shapes: "Shop.Shipping.Rates.parse/1"}
+      )
+
+    assert [[args, "{:error, :invalid_rate}"]] = result.rows
+    assert args =~ ~s|"rate" => binary(5)|
+  end
+
   test "5. fastest-growing ETS tables over a window, and their owners" do
     top =
       first(

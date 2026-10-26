@@ -300,6 +300,7 @@ All variables:
 | `PORTHOLE_CERTFILE` / `PORTHOLE_KEYFILE` | Serve HTTPS | |
 | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
 | `PORTHOLE_TRACE` | `true` lets agents trace (see [tracing](#tracing)) | off |
+| `PORTHOLE_TRACE_SHAPES` | `false` keeps shapes out of traces (see [shapes](#shapes-and-map-keys)) | on, when tracing is |
 | `RELEASE_NODE` / `RELEASE_DISTRIBUTION` | Override the sidecar's own name / name type | `porthole@<IP>` / `name` |
 
 The sidecar refuses to start without tokens or a place to look, and it logs
@@ -464,6 +465,7 @@ table (see the [cookbook](cookbook.md#tracing-who-where-why)):
 | `{"messages_to": "<name or pid>"}` | `trace_messages` | Each message sent to that process: sender, kind (`tag`), time |
 | `{"calls": "<Module or Module.fun/arity>"}` | `trace_calls` | Calls and running time per process and function (counters) |
 | `{"exits": "<name or pid>"}` | `trace_exits` | Exits of that process and of every process it starts: reason class, where |
+| `{"shapes": "<Module.fun/arity>"}` | `trace_shapes` | Each call to that function: the shapes of its arguments and result, its outcome and its wall-clock duration |
 
 **Tracing is off by default.** Enable it on the server with
 `tiers: [:observe, :trace]` in the environment policy, `PORTHOLE_TRACE=true`
@@ -473,7 +475,7 @@ policy can still leave it out (`policy: [tiers: [:observe]]`).
 
 What a trace keeps, and what it doesn't:
 
-- **Metadata only.** `trace_messages` keeps the sender, the time and the
+- **Metadata only, except shapes.** `trace_messages` keeps the sender, the time and the
   message's *tag* (its first element when it is an atom, a struct's name,
   or `call:<tag>` / `cast:<tag>` for GenServer requests), never the rest of
   the message. `trace_exits` keeps the reason's *class* (`FunctionClauseError`,
@@ -498,6 +500,38 @@ What a trace keeps, and what it doesn't:
 
 The agent's tool description explains all this when tracing is enabled, and
 the audit log records each trace's target.
+
+#### Shapes and map keys
+
+A `shapes` trace answers what a function receives and returns *right now*:
+the case of a third party that changed its payload format, or a function
+that quietly returns `{:error, …}` while the code falls back to a default.
+Error trackers only see what raises; shapes see every call. For each call it
+records the **shape** of the arguments and of the result, its outcome (`ok`,
+`error`, `returned`, `raised`) and its wall-clock duration:
+
+```text
+args:    (%{"carrier" => binary(3), "currency" => binary(3), "rate" => binary(5)})
+result:  {:error, :invalid_rate}
+```
+
+A shape replaces every value with its type and size (`binary(5)`, `float`,
+`list(20) of %{...}`), **but keeps atoms and map keys as they are**: they are
+what makes a shape useful (`"rate"` became a string), and in most code they
+are names, not data.
+
+> **Warning: map keys can be data.** A map keyed by emails, user ids or
+> tokens (`%{"ann@example.com" => ...}`) shows those keys to the agent, and
+> through the agent to its model provider. Strings, numbers and other values
+> never leave your node, but keys do, up to 16 per map, cut at 64 bytes. If
+> that is not acceptable for your data, turn shapes off: `trace_shapes: false`
+> in the environment policy (`PORTHOLE_TRACE_SHAPES=false` for the sidecar,
+> `--no-trace-shapes` with `mix porthole.mcp` and `mix porthole.server`), or
+> in a token's policy for one client. The other traces keep working. Filtering
+> keys that look like data is planned.
+
+Shapes trace one function at a time (`Module.fun/arity`), of your
+application, never of OTP or Elixir.
 
 #### How a trace is bounded
 
@@ -532,6 +566,7 @@ Measured on a laptop (OTP 29, 8 schedulers), on a node without Porthole:
 | `calls`: each call to a traced function | +88 ns of running time (~2× on a trivial function; little on real work); call counts alone are free |
 | `calls`: other functions | nothing measurable |
 | `messages_to`: every message sent on the node | +~70 ns (the VM checks whether it is for the target) |
+| `shapes`: each call to the traced function | +~0.8 µs (a call and a return event), plus 1–40 µs to compute the shapes, in the tracing process at low priority; the event limit stops it after 5,000 calls |
 | `messages_to` / `calls`: setting up | every process is flagged one at a time at low priority before the window starts (~0.2–0.35 s at 100k processes), without pausing the node; flagging them in one call paused other processes ~17 ms at 100k |
 | Any trace: when it ends | the VM's `erts_trace_cleaner` removes the session's settings from every process: ~7 reductions per process (~650k at 100k processes), with no measurable pause |
 | `messages_to` / `exits`: each recorded event | a copy to the tracing process, read at low priority |

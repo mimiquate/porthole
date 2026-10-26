@@ -30,6 +30,15 @@ defmodule PortholeSidecar.ConfigTest do
     )
 
     assert Porthole.Policy.environment().tiers == [:observe, :trace]
+    assert Porthole.Policy.environment().trace_shapes
+
+    Config.from_env!(
+      @tokens
+      |> Map.put("DNS_CLUSTER_QUERY", "shop.internal")
+      |> Map.put("PORTHOLE_TRACE_SHAPES", "false")
+    )
+
+    refute Porthole.Policy.environment().trace_shapes
   end
 
   test "PORTHOLE_NODES takes hosts and full node names" do

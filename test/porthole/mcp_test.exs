@@ -66,6 +66,7 @@ defmodule Porthole.MCPTest do
 
     refute description =~ "trace_messages"
     assert schema.properties.trace.maxProperties == 1
+    assert Map.has_key?(schema.properties.trace.properties, :shapes)
 
     assert %{isError: true, content: [%{text: "error (not_allowed)" <> _}]} =
              query(%{

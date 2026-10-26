@@ -28,6 +28,14 @@
   `started_by` on exits), identified on the node while the trace runs, so
   short-lived processes, and the tasks a LiveView or job starts, are named
   after they exit.
+- **Shapes** (`trace: {"shapes": "Module.fun/arity"}` → `trace_shapes`):
+  every call to one function during the window, with the *shapes* of its
+  arguments and result (types and sizes in place of values; atoms and map
+  keys as they are), its outcome (`ok`, `error`, `returned`, `raised`) and
+  its wall-clock duration. For silent `{:error, …}` returns and changed
+  payload formats. **Map keys can be data**: shapes are on when tracing is,
+  and `trace_shapes: false` (`PORTHOLE_TRACE_SHAPES=false`,
+  `--no-trace-shapes`) turns them off.
 - Setting up a trace no longer pauses the node: processes are flagged one at
   a time at low priority, before the window starts (flagging them in one call
   paused other processes ~17 ms at 100k processes).

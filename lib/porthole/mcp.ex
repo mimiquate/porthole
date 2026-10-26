@@ -176,6 +176,12 @@ defmodule Porthole.MCP do
                 description:
                   "Registered name or pid, e.g. a supervisor: exits of it and of the " <>
                     "processes it starts, with reasons (trace_exits)."
+              },
+              shapes: %{
+                type: "string",
+                description:
+                  "Module.function/arity of the application: each call's argument and result " <>
+                    "shapes, outcome and duration (trace_shapes)."
               }
             },
             minProperties: 1,
@@ -208,7 +214,9 @@ defmodule Porthole.MCP do
       Tracing: pass `trace` (one key) with window_ms to record what happens during the window, \
       and query the matching table (join pids with processes, collected at the end of the window). \
       Use it after a snapshot points at a process or module: who floods a mailbox (messages_to), \
-      where a process spends its time (calls), why processes crash (exits). A trace stops early \
+      where a process spends its time (calls), why processes crash (exits), what a function \
+      receives and returns and how long it takes (shapes: silent {:error, ...} returns, a \
+      changed payload format, latency). A trace stops early \
       at its event limit (see notes). messages_to makes every message sent on the node slightly \
       slower while it runs: keep windows short (a few seconds). Read each table's limits below: \
       messages_to does not see timer messages or call replies, and trace_calls.time_us is CPU \

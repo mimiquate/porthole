@@ -11,23 +11,6 @@ defmodule Porthole.Tables.TraceExits do
 
   alias Porthole.{Remote, Term}
 
-  # Errors raised by the VM, under the names Elixir developers see in logs.
-  @exceptions %{
-    function_clause: FunctionClauseError,
-    undef: UndefinedFunctionError,
-    badarg: ArgumentError,
-    badarith: ArithmeticError,
-    badmatch: MatchError,
-    case_clause: CaseClauseError,
-    try_clause: TryClauseError,
-    with_clause: WithClauseError,
-    badkey: KeyError,
-    badmap: BadMapError,
-    badfun: BadFunctionError,
-    badarity: BadArityError,
-    system_limit: SystemLimitError
-  }
-
   @impl true
   def name, do: "trace_exits"
 
@@ -81,7 +64,7 @@ defmodule Porthole.Tables.TraceExits do
           name: name,
           initial_call: initial_call,
           started_by: started_by,
-          reason: Term.name(Map.get(@exceptions, reason, reason)),
+          reason: Porthole.Trace.exception_name(reason),
           location: Term.mfa(location),
           at_ms: at_ms
         }

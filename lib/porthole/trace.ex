@@ -9,7 +9,13 @@ defmodule Porthole.Trace do
       counts and running time of a module's functions, per process, in
       `trace_calls`;
     * `%{exits: "Shop.Payments.Supervisor"}`: exits of that process and of
-      every process it starts, with the reason's class, in `trace_exits`.
+      every process it starts, with the reason's class, in `trace_exits`;
+    * `%{shapes: "Shop.Payments.parse/1"}`: every call to that function,
+      with the *shapes* of its arguments and result (their structure: types,
+      sizes, atoms and map keys, never other values), its outcome and its
+      duration, in `trace_shapes`. Map keys are shown as they are, so keys
+      that are data (emails, ids) do show: a policy can disallow shapes
+      (`trace_shapes: false`).
 
   The trace runs during the query's window (`window_ms`, required), on every
   queried node, within the policy's `max_trace_events`, and needs the
@@ -26,12 +32,18 @@ defmodule Porthole.Trace do
           {:messages_to, target()}
           | {:exits, target()}
           | {:calls, {modules :: [String.t()], function :: String.t() | nil, arity() | nil}}
+          | {:shapes, {modules :: [String.t()], function :: String.t(), arity()}}
 
-  @kinds %{"messages_to" => :messages_to, "calls" => :calls, "exits" => :exits}
+  @kinds %{
+    "messages_to" => :messages_to,
+    "calls" => :calls,
+    "exits" => :exits,
+    "shapes" => :shapes
+  }
 
   @usage ~s(trace must be one of {"messages_to": "<registered name or pid>"}, ) <>
            ~s({"calls": "<Module>" or "<Module.function/arity>"}, ) <>
-           ~s({"exits": "<registered name or pid>"})
+           ~s({"exits": "<registered name or pid>"}, {"shapes": "<Module.function/arity>"})
 
   @doc """
   Validates a trace option (a map or keyword list with one key).
@@ -82,6 +94,19 @@ defmodule Porthole.Trace do
     end
   end
 
+  defp parse(:shapes, text) do
+    case parse(:calls, text) do
+      {:ok, {:calls, {modules, function, arity}}} when function != nil ->
+        {:ok, {:shapes, {modules, function, arity}}}
+
+      _not_a_function ->
+        bad_request(
+          ~s{shapes must be one function with its arity ("Shop.Payments.parse/1"), } <>
+            ~s{got #{inspect(text)}}
+        )
+    end
+  end
+
   defp parse(kind, text) do
     case process(text) do
       {:ok, target} ->
@@ -119,12 +144,14 @@ defmodule Porthole.Trace do
   def table({:messages_to, _}), do: Tables.TraceMessages
   def table({:calls, _}), do: Tables.TraceCalls
   def table({:exits, _}), do: Tables.TraceExits
+  def table({:shapes, _}), do: Tables.TraceShapes
 
   @doc "The trace option that fills `table`, as the agent writes it."
   @spec usage(module()) :: String.t()
   def usage(Tables.TraceMessages), do: ~s(trace: {"messages_to": "<registered name or pid>"})
   def usage(Tables.TraceCalls), do: ~s(trace: {"calls": "<Module or Module.function/arity>"})
   def usage(Tables.TraceExits), do: ~s(trace: {"exits": "<registered name or pid>"})
+  def usage(Tables.TraceShapes), do: ~s(trace: {"shapes": "<Module.function/arity>"})
 
   @doc "Whether `trace` targets one pid (which only means something on one node)."
   @spec pid?(t()) :: boolean()
@@ -135,7 +162,9 @@ defmodule Porthole.Trace do
   @spec describe(t()) :: String.t()
   def describe({_kind, {:pid, pid}}), do: "#PID#{pid}"
   def describe({_kind, {:name, [_elixir, name]}}), do: name
-  def describe({:calls, {modules, function, arity}}), do: describe_calls(modules, function, arity)
+
+  def describe({kind, {modules, function, arity}}) when kind in [:calls, :shapes],
+    do: describe_calls(modules, function, arity)
 
   defp describe_calls(modules, nil, nil), do: List.last(modules)
   defp describe_calls(modules, function, arity), do: "#{List.last(modules)}.#{function}/#{arity}"
@@ -213,6 +242,94 @@ defmodule Porthole.Trace do
 
   defp initial_call({:supervisor, module, 1}), do: Porthole.Term.mfa({module, :init, 1})
   defp initial_call(call), do: Porthole.Term.mfa(call)
+
+  # Errors raised by the VM, under the names Elixir developers see in logs.
+  @exceptions %{
+    function_clause: FunctionClauseError,
+    undef: UndefinedFunctionError,
+    badarg: ArgumentError,
+    badarith: ArithmeticError,
+    badmatch: MatchError,
+    case_clause: CaseClauseError,
+    try_clause: TryClauseError,
+    with_clause: WithClauseError,
+    badkey: KeyError,
+    badmap: BadMapError,
+    badfun: BadFunctionError,
+    badarity: BadArityError,
+    system_limit: SystemLimitError
+  }
+
+  @doc """
+  The name of an exception or error class as Elixir developers see it:
+  `:function_clause` becomes `"FunctionClauseError"`, a module its name.
+  """
+  @spec exception_name(atom()) :: String.t()
+  def exception_name(reason) when is_atom(reason),
+    do: Porthole.Term.name(Map.get(@exceptions, reason, reason))
+
+  @doc ~S"""
+  Renders a shape (see `Porthole.Gather.trace/7`) as Elixir-like text: types
+  and sizes in place of values.
+
+      iex> Porthole.Trace.render_shape({:tuple, [{:atom, :ok}, {:map, 2, [{"amount", {:binary, 5}}, {"currency", {:binary, 3}}]}]})
+      ~s({:ok, %{"amount" => binary(5), "currency" => binary(3)}})
+
+  """
+  @spec render_shape(term()) :: String.t()
+  def render_shape(:more), do: "…"
+  def render_shape({:atom, atom}), do: inspect(atom)
+  def render_shape({:binary, size}), do: "binary(#{size})"
+  def render_shape({:list, 0, _}), do: "[]"
+  def render_shape({:list, -1, first}), do: "improper_list(#{render_shape(first)}, …)"
+  def render_shape({:list, length, first}), do: "list(#{length}) of #{render_shape(first)}"
+  def render_shape({:tuple, size}) when is_integer(size), do: "tuple(#{size})"
+
+  def render_shape({:tuple, elements}),
+    do: "{" <> Enum.map_join(elements, ", ", &render_shape/1) <> "}"
+
+  def render_shape({:struct, struct, size, fields}) do
+    shown = Enum.map(fields, fn {key, value} -> "#{key}: #{render_shape(value)}" end)
+    "%#{Porthole.Term.name(struct)}{" <> Enum.join(shown ++ more(size, fields), ", ") <> "}"
+  end
+
+  def render_shape({:map, size, pairs}) do
+    shown =
+      Enum.map(pairs, fn
+        {key, value} when is_atom(key) -> "#{key}: #{render_shape(value)}"
+        {key, value} -> "#{render_key(key)} => #{render_shape(value)}"
+      end)
+
+    "%{" <> Enum.join(shown ++ more(size, pairs), ", ") <> "}"
+  end
+
+  def render_shape(type) when is_atom(type), do: Atom.to_string(type)
+
+  defp render_key(key) when is_integer(key) or is_binary(key), do: inspect(key)
+  defp render_key(shape), do: render_shape(shape)
+
+  defp more(size, shown) when size > length(shown), do: ["… (#{size - length(shown)} more)"]
+  defp more(_size, _shown), do: []
+
+  @doc """
+  A traced call's outcome (`ok`, `error`, `returned` or `raised`) and its
+  result as text: the result's shape, or the exception's name.
+  """
+  @spec outcome(term()) :: {String.t(), String.t()}
+  def outcome({:returned, shape}) do
+    kind =
+      case shape do
+        {:atom, :ok} -> "ok"
+        {:tuple, [{:atom, :ok} | _]} -> "ok"
+        {:atom, :error} -> "error"
+        {:tuple, [{:atom, :error} | _]} -> "error"
+        _other -> "returned"
+      end
+
+    {kind, render_shape(shape)}
+  end
+
+  def outcome({:raised, reason}), do: {"raised", exception_name(reason)}
 
   defp bad_request(message), do: {:error, Error.new(:bad_request, message)}
 end

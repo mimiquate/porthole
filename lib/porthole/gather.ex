@@ -411,6 +411,10 @@ defmodule Porthole.Gather do
               pid = :erlang.whereis(name),
               is_pid(pid),
               do: pid
+
+        # A function (shapes): resolved in its plan.
+        _function ->
+          []
       end
 
     # -- What is kept of an event ------------------------------------------
@@ -547,10 +551,189 @@ defmodule Porthole.Gather do
       )
     end
 
+    # The shape of a term: its structure without its values. Atoms and map
+    # keys are kept (they are names, not data, in most code: see the docs'
+    # warning), everything else becomes its type and size. Bounded in depth
+    # (4) and width (16 map keys, 8 tuple elements, a list's first element).
+    shape = fn
+      _shape, _term, depth when depth > 4 ->
+        :more
+
+      _shape, atom, _depth when is_atom(atom) ->
+        {:atom, atom}
+
+      _shape, integer, _depth when is_integer(integer) ->
+        :integer
+
+      _shape, float, _depth when is_float(float) ->
+        :float
+
+      _shape, binary, _depth when is_binary(binary) ->
+        {:binary, byte_size(binary)}
+
+      _shape, [], _depth ->
+        {:list, 0, nil}
+
+      shape, [first | _] = list, depth ->
+        length =
+          try do
+            length(list)
+          catch
+            # An improper list.
+            :error, _ -> -1
+          end
+
+        {:list, length, shape.(shape, first, depth + 1)}
+
+      shape, tuple, depth when is_tuple(tuple) and tuple_size(tuple) <= 8 ->
+        {:tuple,
+         :lists.map(fn e -> shape.(shape, e, depth + 1) end, :erlang.tuple_to_list(tuple))}
+
+      _shape, tuple, _depth when is_tuple(tuple) ->
+        {:tuple, tuple_size(tuple)}
+
+      shape, %{__struct__: struct} = map, depth when is_atom(struct) ->
+        fields = :maps.remove(:__struct__, map)
+        keys = :lists.sublist(:lists.sort(:maps.keys(fields)), 16)
+
+        {:struct, struct, map_size(fields),
+         :lists.map(fn k -> {k, shape.(shape, :maps.get(k, fields), depth + 1)} end, keys)}
+
+      shape, map, depth when is_map(map) ->
+        keys = :lists.sublist(:lists.sort(:maps.keys(map)), 16)
+
+        # Keys as they are (binaries cut to 64 bytes), other key terms as
+        # their shape.
+        key = fn
+          k when is_atom(k) or is_integer(k) -> k
+          k when is_binary(k) and byte_size(k) <= 64 -> k
+          k when is_binary(k) -> :erlang.binary_part(k, 0, 64)
+          k -> shape.(shape, k, 4)
+        end
+
+        {:map, map_size(map),
+         :lists.map(fn k -> {key.(k), shape.(shape, :maps.get(k, map), depth + 1)} end, keys)}
+
+      _shape, pid, _depth when is_pid(pid) ->
+        :pid
+
+      _shape, ref, _depth when is_reference(ref) ->
+        :reference
+
+      _shape, fun, _depth when is_function(fun) ->
+        :function
+
+      _shape, port, _depth when is_port(port) ->
+        :port
+
+      _shape, _other, _depth ->
+        :other
+    end
+
+    # What a raised exception was: its struct or error atom, never its data.
+    raised = fn
+      {_class, %{__exception__: true, __struct__: struct}} -> struct
+      {_class, reason} when is_atom(reason) -> reason
+      {_class, reason} when tuple_size(reason) > 0 and is_atom(elem(reason, 0)) -> elem(reason, 0)
+      {class, _reason} -> class
+    end
+
     # -- The trace: what to enable in the session, what to keep ------------
 
     plan =
       case {spec, target} do
+        {{:shapes, {modules, function, arity}}, _} ->
+          loaded =
+            for text <- modules,
+                {:ok, module} <- [existing.(text)],
+                :erlang.module_loaded(module),
+                do: module
+
+          case loaded do
+            [] ->
+              :not_loaded
+
+            [module | _] ->
+              # Tracing these would slow down nearly everything on the node.
+              refused =
+                :code.is_loaded(module) == {:file, :preloaded} or
+                  :lists.member(:application.get_application(module), [
+                    {:ok, :kernel},
+                    {:ok, :stdlib},
+                    {:ok, :elixir},
+                    {:ok, :compiler}
+                  ])
+
+              fun =
+                case existing.(function) do
+                  {:ok, fun} ->
+                    if :lists.member({fun, arity}, :erlang.get_module_info(module, :functions)),
+                      do: fun
+
+                  :none ->
+                    nil
+                end
+
+              cond do
+                refused ->
+                  :refused
+
+                fun == nil ->
+                  :no_function
+
+                true ->
+                  enable = fn session ->
+                    flag_all.(session, [:call, :monotonic_timestamp])
+
+                    # A call event (with the arguments) and a return or
+                    # exception event (with the result) per call.
+                    :trace.function(
+                      session,
+                      {module, fun, arity},
+                      [{:_, [], [{:return_trace}, {:exception_trace}]}],
+                      [:local]
+                    )
+
+                    %{}
+                  end
+
+                  # A call's shape waits, per process, for its result (a
+                  # stack: the function may call itself).
+                  finish = fn pid, outcome, ts, known ->
+                    {args, duration_us, known} =
+                      case :maps.get({:calls, pid}, known, []) do
+                        [{args, called} | rest] ->
+                          {args, div(ts - called, 1_000), :maps.put({:calls, pid}, rest, known)}
+
+                        [] ->
+                          # Called before the trace started.
+                          {nil, nil, known}
+                      end
+
+                    {id, known} = known_identity.(pid, known)
+                    {{pid, args, outcome, duration_us, at.(ts), id}, known}
+                  end
+
+                  keep = fn
+                    {:trace_ts, pid, :call, {_m, _f, args}, ts}, known ->
+                      shapes = :lists.map(fn arg -> shape.(shape, arg, 0) end, args)
+                      calls = :maps.get({:calls, pid}, known, [])
+                      {nil, :maps.put({:calls, pid}, [{shapes, ts} | calls], known)}
+
+                    {:trace_ts, pid, :return_from, _mfa, value, ts}, known ->
+                      finish.(pid, {:returned, shape.(shape, value, 0)}, ts, known)
+
+                    {:trace_ts, pid, :exception_from, _mfa, error, ts}, known ->
+                      finish.(pid, {:raised, raised.(error)}, ts, known)
+
+                    _other, known ->
+                      {nil, known}
+                  end
+
+                  {enable, keep}
+              end
+          end
+
         {_spec, []} ->
           :not_found
 
@@ -751,8 +934,8 @@ defmodule Porthole.Gather do
     end
 
     case plan do
-      :not_found ->
-        %{status: :not_found}
+      status when is_atom(status) ->
+        %{status: status}
 
       {enable, keep} ->
         session = :trace.session_create(:porthole, me, [])

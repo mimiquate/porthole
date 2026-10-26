@@ -350,6 +350,103 @@ defmodule Porthole.TraceTest do
     end
   end
 
+  defmodule Parser do
+    @moduledoc false
+    def parse(%{"rate" => rate}) when is_number(rate), do: {:ok, rate}
+    def parse(%{"rate" => _}), do: {:error, :invalid_rate}
+    def parse(:boom), do: raise(ArgumentError, "secret detail 4242")
+  end
+
+  describe "shapes" do
+    setup do
+      payloads = [%{"rate" => 12.5, "card" => "4242 4242"}, %{"rate" => "13.10"}, :boom]
+
+      caller =
+        spawn(fn ->
+          Process.register(self(), :trace_test_parser_caller)
+
+          loop = fn loop ->
+            for payload <- payloads do
+              try do
+                Parser.parse(payload)
+              rescue
+                ArgumentError -> :ok
+              end
+            end
+
+            Process.sleep(5)
+            loop.(loop)
+          end
+
+          loop.(loop)
+        end)
+
+      on_exit(fn -> Process.exit(caller, :kill) end)
+      :ok
+    end
+
+    test "records each call's argument and result shapes, outcome and duration" do
+      {:ok, result} =
+        query(
+          "SELECT DISTINCT outcome, args, result, name FROM trace_shapes ORDER BY 1, 2",
+          trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
+        )
+
+      assert [
+               ["error", ~s|(%{"rate" => binary(5)})|, "{:error, :invalid_rate}", caller],
+               ["ok", ~s|(%{"card" => binary(9), "rate" => float})|, "{:ok, float}", caller],
+               ["raised", "(:boom)", "ArgumentError", caller]
+             ] = result.rows
+
+      assert caller == "trace_test_parser_caller"
+      # Values never leave the node: keys and atoms do, nothing else.
+      refute inspect(result) =~ "4242"
+      refute inspect(result) =~ "13.10"
+      refute inspect(result) =~ "secret"
+
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_shapes WHERE duration_us IS NULL OR duration_us < 0",
+          trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
+        )
+
+      assert result.rows == [[0]]
+    end
+
+    test "a policy can keep shapes out; they need one function, of the application" do
+      Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: false)
+
+      assert {:error, %Error{reason: :not_allowed, message: message}} =
+               query("SELECT * FROM trace_shapes",
+                 trace: %{shapes: "Porthole.TraceTest.Parser.parse/1"}
+               )
+
+      assert message =~ "trace_shapes: false"
+
+      # Other traces still work.
+      assert {:ok, _} =
+               query("SELECT count(*) FROM trace_calls",
+                 trace: %{calls: "Porthole.TraceTest.Parser"}
+               )
+
+      Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+
+      assert {:error, %Error{reason: :bad_request}} =
+               query("SELECT * FROM trace_shapes", trace: %{shapes: "Porthole.TraceTest.Parser"})
+
+      {:ok, result} = query("SELECT count(*) FROM trace_shapes", trace: %{shapes: "Enum.map/2"})
+      assert [note] = result.notes
+      assert note =~ "part of OTP or Elixir"
+
+      {:ok, result} =
+        query("SELECT count(*) FROM trace_shapes",
+          trace: %{shapes: "Porthole.TraceTest.Parser.nope/1"}
+        )
+
+      assert [note] = result.notes
+      assert note =~ "no such function"
+    end
+  end
+
   describe "validation" do
     test "needs a window, the trace tier and a matching table" do
       assert {:error, %Error{reason: :window_required}} =

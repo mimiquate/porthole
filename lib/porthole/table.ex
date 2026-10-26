@@ -61,7 +61,8 @@ defmodule Porthole.Table do
   @traces [
     Porthole.Tables.TraceMessages,
     Porthole.Tables.TraceCalls,
-    Porthole.Tables.TraceExits
+    Porthole.Tables.TraceExits,
+    Porthole.Tables.TraceShapes
   ]
 
   @doc "All snapshot table modules."

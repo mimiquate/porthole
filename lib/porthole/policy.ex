@@ -45,6 +45,10 @@ defmodule Porthole.Policy do
     is stopped (counted as the VM produces them). Events wait in the tracing
     process until read, under a memory cap: raised far above the default (to
     ~100k and more), a flood can fill that cap and the trace returns nothing.
+  * `:trace_shapes` - whether traces may record the shapes of a function's
+    arguments and results (`Porthole.Trace`, `shapes`). Shapes show map keys
+    as they are, and keys can be data (emails, ids): set it to `false` to
+    trace without them. Any layer can turn it off; none can turn it back on.
   * `:max_trace_window_ms` - longest window for a trace. Lower than
     `:max_window_ms`: a sampling window costs nothing while it waits, a trace
     costs for as long as it runs.
@@ -64,7 +68,8 @@ defmodule Porthole.Policy do
           queries_per_minute: limit(),
           max_concurrent: limit(),
           max_trace_events: limit(),
-          max_trace_window_ms: limit()
+          max_trace_window_ms: limit(),
+          trace_shapes: boolean()
         }
 
   defstruct tiers: [:observe],
@@ -77,7 +82,8 @@ defmodule Porthole.Policy do
             queries_per_minute: 60,
             max_concurrent: 4,
             max_trace_events: 10_000,
-            max_trace_window_ms: 10_000
+            max_trace_window_ms: 10_000,
+            trace_shapes: true
 
   @limits [
     :max_rows,
@@ -130,6 +136,7 @@ defmodule Porthole.Policy do
     struct!(
       %__MODULE__{
         tiers: Enum.filter(a.tiers, &(&1 in b.tiers)),
+        trace_shapes: a.trace_shapes and b.trace_shapes,
         nodes:
           case {a.nodes, b.nodes} do
             {:all, nodes} -> nodes
@@ -156,6 +163,16 @@ defmodule Porthole.Policy do
       :policy,
       Keyword.put(policy, :tiers, Enum.uniq(tiers ++ [:trace]))
     )
+  end
+
+  @doc """
+  Disallows shapes in traces (`trace_shapes: false` in the environment
+  policy), for servers configured by flags or environment variables.
+  """
+  @spec forbid_trace_shapes() :: :ok
+  def forbid_trace_shapes do
+    policy = Application.get_env(:porthole, :policy, [])
+    Application.put_env(:porthole, :policy, Keyword.put(policy, :trace_shapes, false))
   end
 
   @doc "Checks that the policy allows `tier` and that it is implemented."

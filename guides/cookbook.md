@@ -399,3 +399,18 @@ FROM trace_exits
 GROUP BY initial_call, reason, location
 ORDER BY exits DESC;
 ```
+
+What a function receives and returns right now, grouped by outcome: a
+silent `{:error, …}` next to the inputs that cause it (for example, a field
+that arrives as a string instead of a number). `duration_us` is wall-clock
+time, waiting included. Shapes show map keys as they are (see
+[shapes and map keys](team-setup.md#shapes-and-map-keys)):
+
+```sql
+-- window_ms: 2000
+-- trace: shapes=Shop.Shipping.Rates.parse/1
+SELECT outcome, args, result, count(*) AS calls, max(duration_us) AS max_us
+FROM trace_shapes
+GROUP BY outcome, args, result
+ORDER BY calls DESC;
+```

@@ -100,6 +100,18 @@ when a real question needs it.
     setup 0.2–0.35 s, and the window now starts after setup. Ending any session makes
     `erts_trace_cleaner` (a VM process) walk every process: ~650k reductions at 100k, with
     no measurable pause (`exits`, which flags few processes, costs the same cleanup).
+  - **Shapes** (2026-10-26, branch `trace-shapes`): `{"shapes": "Mod.fun/arity"}` →
+    `trace_shapes`, one row per call with argument and result shapes, outcome and wall-clock
+    `duration_us` (call and return events, paired per process with a stack). The input
+    and output trace is the legitimate gap next to error trackers (which see what raises,
+    with history): silent `{:error, ...}` returns, format drift, latency. Decisions: show
+    every map key (cut at 64 bytes, 16 per map), atoms too, never other values; be loud
+    about it in the docs; `trace_shapes` policy flag (on by default, any layer can turn it
+    off; `PORTHOLE_TRACE_SHAPES=false`, `--no-trace-shapes`); key filtering is a later
+    privacy enhancement. Measured (spike): +370 ns per call for return events alone, +800
+    ns with call events, bounded by the event limit (5,000 calls); evaluated shapes cost
+    1–41 µs per term. `{message, false}` in a match spec suppresses the call event but
+    keeps return/exception events. Demo: `Shop.Shipping.Rates.parse/1` (eval question 9).
   - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
     evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
     connection, and a flood). Eval question 4b: who floods the stuck mailbox
@@ -468,6 +480,8 @@ shell/remote console access.
 6. Which processes burn the most reductions over a 5s window?
 7. Are there orphaned processes (no links, no monitors, not supervised)?
 8. Which application's processes account for most memory?
+
+9. Which input makes a function fail silently (a trace of shapes)?
 
 Added beyond the original set: is any VM limit getting close (`system`)? Who is leaking
 sockets (`ports`)? Is there a deadlock (recursive CTE over `waiting_on`)? Who floods the stuck

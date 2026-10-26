@@ -15,6 +15,12 @@ defmodule Porthole.PolicyTest do
     end
   end
 
+  test "shapes are allowed unless a layer turns them off" do
+    assert Policy.new().trace_shapes
+    refute Policy.intersect(Policy.new(), Policy.new(trace_shapes: false)).trace_shapes
+    refute Policy.intersect(Policy.new(trace_shapes: false), Policy.new()).trace_shapes
+  end
+
   test "tiers missing from the policy are not allowed" do
     assert {:error, %Error{reason: :not_allowed}} =
              Policy.authorize(Policy.new(tiers: []), :observe)

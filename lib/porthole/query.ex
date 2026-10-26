@@ -136,6 +136,15 @@ defmodule Porthole.Query do
            "for as long as it runs; a few seconds usually answers), got #{window}"
        )}
 
+  defp check_trace({:shapes, _}, _window, %Policy{trace_shapes: false}),
+    do:
+      {:error,
+       Error.new(
+         :not_allowed,
+         "this server does not allow shapes in traces (trace_shapes: false): they show " <>
+           "map keys, which can be data; the other traces are available"
+       )}
+
   defp check_trace(_trace, _window, policy), do: Policy.authorize(policy, :trace)
 
   # A pid is <0.X.Y> on every node: it names a process on one node only.
