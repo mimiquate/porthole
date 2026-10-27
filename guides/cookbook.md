@@ -332,3 +332,86 @@ FROM processes
 GROUP BY initial_call, node
 ORDER BY initial_call, node;
 ```
+
+## Tracing: who, where, why
+
+Snapshots show *what is*; a trace records *what happens* during the window.
+It needs the server to allow tracing (see
+[team setup](team-setup.md#tracing)), a `trace` argument with one key, and
+`window_ms`; the results land in a `trace_*` table. Queries marked
+`-- trace: kind=target` need that trace: `trace: {"messages_to":
+"Shop.Notifications"}` in the MCP tool, `--trace messages_to=Shop.Notifications`
+with `mix porthole.query`, or `trace: %{messages_to: "Shop.Notifications"}`
+with `Porthole.query/2`. Keep windows short: a few seconds is usually
+enough (at most 10 s by default), and a trace stops early at its event or
+memory limit anyway (`notes` says when).
+
+Who floods a mailbox, and with what kind of message. Senders are identified
+on the node while the trace runs, so short-lived ones are named even after
+they exit; `sender_started_by` names who started a task (join `processes`
+on `sender` for more about live ones):
+
+```sql
+-- window_ms: 2000
+-- trace: messages_to=Shop.Notifications
+SELECT coalesce(sender_name, sender_initial_call, sender) AS sender, sender_started_by,
+       tag, count(*) AS sent
+FROM trace_messages
+GROUP BY 1, 2, 3
+ORDER BY sent DESC
+LIMIT 10;
+```
+
+Who calls a GenServer, and with which requests (`tag` is `call:<request>`
+or `cast:<request>` for GenServer messages):
+
+```sql
+-- window_ms: 2000
+-- trace: messages_to=Shop.Pricing
+SELECT t.tag, count(*) AS requests, count(DISTINCT t.sender) AS callers
+FROM trace_messages t
+GROUP BY t.tag
+ORDER BY requests DESC;
+```
+
+Where a module's time goes, function by function (time counts only while
+running, not waiting):
+
+```sql
+-- window_ms: 2000
+-- trace: calls=Shop.Pricing
+SELECT function, sum(calls) AS calls, sum(time_us) AS time_us,
+       sum(time_us) / sum(calls) AS us_per_call
+FROM trace_calls
+GROUP BY function
+ORDER BY time_us DESC;
+```
+
+Why a supervisor's children keep exiting (restarted children are traced
+too; `reason` is the class, never the data; `initial_call` says which child
+it was, although it is gone):
+
+```sql
+-- window_ms: 2000
+-- trace: exits=Shop.Payments.Supervisor
+SELECT initial_call, reason, location, count(*) AS exits
+FROM trace_exits
+GROUP BY initial_call, reason, location
+ORDER BY exits DESC;
+```
+
+What a function receives and returns right now, grouped by outcome: a
+silent `{:error, …}` next to the inputs that cause it (for example, a field
+that arrives as a string instead of a number). `duration_us` is wall-clock
+time, waiting included. Shapes show map keys as they are, so they are off
+unless the server enables them (see
+[shapes and map keys](team-setup.md#shapes-and-map-keys)):
+
+```sql
+-- window_ms: 2000
+-- trace: shapes=Shop.Shipping.Rates.parse/1
+SELECT outcome, args, result, count(*) AS calls, max(duration_us) AS max_us
+FROM trace_shapes
+GROUP BY outcome, args, result
+ORDER BY calls DESC;
+```

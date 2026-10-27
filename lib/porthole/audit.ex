@@ -7,7 +7,7 @@ defmodule Porthole.Audit do
 
       {"at": "2026-09-25T16:11:40.008Z", "client": "oncall", "remote_ip": "10.0.3.7",
        "sql": "SELECT ...", "nodes": ["app@10.0.1.12"], "window_ms": 10000,
-       "status": "ok", "rows": 3, "truncated": false, "error": null, "duration_ms": 10042}
+       "trace": null, "status": "ok", "rows": 3, "truncated": false, "error": null, "duration_ms": 10042}
 
   By default records are logged at `:info` level (prefixed `porthole.audit`),
   so they go wherever your logs go. To send them elsewhere, configure a
@@ -26,6 +26,7 @@ defmodule Porthole.Audit do
           sql: String.t(),
           nodes: [String.t()] | String.t() | nil,
           window_ms: pos_integer() | nil,
+          trace: String.t() | nil,
           status: String.t(),
           rows: non_neg_integer() | nil,
           truncated: boolean() | nil,
@@ -46,6 +47,8 @@ defmodule Porthole.Audit do
       # The nodes a query actually ran on when known, otherwise what was asked.
       nodes: nodes(outcome, opts[:nodes]),
       window_ms: opts[:window_ms],
+      # What was traced, as the client asked for it (a trace's target).
+      trace: if(opts[:trace], do: Porthole.Term.truncate(inspect(opts[:trace]), 512)),
       duration_ms: duration_ms
     }
 

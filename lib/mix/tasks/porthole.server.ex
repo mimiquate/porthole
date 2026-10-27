@@ -34,7 +34,7 @@ defmodule Mix.Tasks.Porthole.Server do
 
   @impl true
   def run(args) do
-    {query_opts, _rest, opts} = Porthole.CLI.setup!(args, @switches)
+    {query_opts, _rest, opts} = Porthole.CLI.setup!(args, [serves: true] ++ @switches)
 
     {:ok, ip} =
       opts |> Keyword.get(:bind, "127.0.0.1") |> String.to_charlist() |> :inet.parse_address()

@@ -183,6 +183,30 @@ defmodule Porthole.KubeTest do
 
     # Everything up creates carries the label down deletes by.
     for item <- manifest.items, do: assert(item.metadata.labels[Kube.label()] == "shop-porthole")
+
+    # Tracing is off unless --trace.
+    refute Enum.find(container.env, &(&1.name == "PORTHOLE_TRACE"))
+
+    traced =
+      Kube.manifest("shop-porthole", target, release, tokens: "me:abc", image: "img", trace: true)
+
+    [traced_container] = List.last(traced.items).spec.template.spec.containers
+    assert %{value: "true"} = Enum.find(traced_container.env, &(&1.name == "PORTHOLE_TRACE"))
+    # Shapes only when asked for.
+    refute Enum.find(traced_container.env, &(&1.name == "PORTHOLE_TRACE_SHAPES"))
+
+    shaped =
+      Kube.manifest("shop-porthole", target, release,
+        tokens: "me:abc",
+        image: "img",
+        trace: true,
+        trace_shapes: true
+      )
+
+    [shaped_container] = List.last(shaped.items).spec.template.spec.containers
+
+    assert %{value: "true"} =
+             Enum.find(shaped_container.env, &(&1.name == "PORTHOLE_TRACE_SHAPES"))
   end
 
   test "reading the release leaves the cookie out when it is referenced", %{

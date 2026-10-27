@@ -8,7 +8,7 @@ as SQL tables, so an agent can compose one precise question instead of calling
 many narrow tools. It is a sibling of Airlock: Airlock controls what agents can
 *do*, Porthole controls what they can *see*.
 
-> **Status:** spike. Only the `observe` capability tier is implemented.
+> **Status:** spike. The `observe` and `trace` capability tiers are implemented.
 
 **Does it help?** In a [blind eval](evals/2026-09-shop-blind.md) on an
 app with nine planted problems, an agent with Porthole found 9/9 in about a
@@ -141,6 +141,17 @@ WHERE links_count = 0 AND monitors_count = 0 AND monitored_by_count = 0
 | `applications` | loaded app        | name, vsn, description, running                                                                           |
 | `system`       | node              | memory by category, process/atom/port/ETS counts vs limits, run_queue, schedulers, uptime                 |
 
+With a window and a `trace` argument, a query can also record what happens
+during the window, in one of three more tables (tracing is off unless the
+server enables it; see [tracing](guides/team-setup.md#tracing)):
+
+| Table | One row per | Columns |
+|-------|-------------|---------|
+| `trace_messages` | message sent to a process (`messages_to`) | sender (with its name, initial call and who started it), receiver, tag (what kind of message), at_ms |
+| `trace_calls` | process and function called (`calls`) | pid (with its name, initial call and who started it, if still alive), function, calls, time_us |
+| `trace_exits` | exit of a process or of what it started (`exits`) | pid, name, initial_call, started_by, reason (class), location, at_ms |
+| `trace_shapes` | call to one function (`shapes`) | pid, name, initial_call, started_by, args and result *shapes*, outcome (ok/error/returned/raised), duration_us, at_ms |
+
 Every table has a `node` column. With a window, `processes` gains
 `reductions_delta`, `memory_delta`, `message_queue_len_delta` and
 `binary_memory_delta`, `ets_tables` gains `size_delta` and `memory_delta`,
@@ -175,6 +186,16 @@ aggregates and subqueries, and the running system stays the source of truth.
   costs](guides/team-setup.md#what-evaluation-costs).
 - **Authenticated.** The HTTP server requires a bearer token per client; each
   token carries its own policy, and removing it revokes access.
+- **Traces are bounded too.** A trace runs in an OTP trace session that the
+  VM removes as soon as it ends (window over, query abandoned, connection
+  lost); it lasts at most 10 s, stops early at an event or memory limit, and
+  runs one at a time. Messages
+  and exits keep metadata only: a message's sender and kind, never its
+  contents; an exit's reason class, never its data. **Shapes show more:** the
+  structure of a function's arguments and results, with their atoms and
+  **map keys as they are** (keys can be personal data, such as emails), so
+  they are off unless an operator enables them too (`trace_shapes: true`).
+  Tracing itself is off unless the server enables it.
 - **Policies** define every tier (`observe`, `trace`, `evaluate`, `mutate`)
   and compose by intersection: `config :porthole, :policy` ∩ session ∩
   request.

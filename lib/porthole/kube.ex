@@ -294,6 +294,11 @@ defmodule Porthole.Kube do
         %{name: "PORTHOLE_BIND", value: if(release.inet6, do: "::", else: "0.0.0.0")},
         %{name: Trial.trial_marker(), value: "true"}
       ] ++
+        if(settings[:trace], do: [%{name: "PORTHOLE_TRACE", value: "true"}], else: []) ++
+        if(settings[:trace_shapes],
+          do: [%{name: "PORTHOLE_TRACE_SHAPES", value: "true"}],
+          else: []
+        ) ++
         if(release.inet6, do: [%{name: "ERL_AFLAGS", value: "-proto_dist inet6_tcp"}], else: [])
 
     %{
