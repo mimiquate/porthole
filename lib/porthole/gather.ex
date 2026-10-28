@@ -1288,6 +1288,7 @@ defmodule Porthole.Gather do
       ets_count: :erlang.system_info(:ets_count),
       ets_limit: :erlang.system_info(:ets_limit),
       reductions: reductions,
+      persistent_term: :persistent_term.info(),
       gc_count: gc_count,
       gc_bytes_reclaimed: gc_words_reclaimed * :erlang.system_info(:wordsize),
       io_input: io_input,

@@ -70,6 +70,40 @@ defmodule Porthole.QueryTest do
     assert gc_delta > 0
   end
 
+  test "system shows atoms, ETS tables and persistent terms growing over a window" do
+    grow =
+      spawn(fn ->
+        Process.sleep(50)
+        # A new atom, a new ETS table and a new persistent term.
+        String.to_atom("porthole_test_#{System.unique_integer([:positive])}")
+        :ets.new(:porthole_test_growth, [:public])
+        # (a list: large binaries are counted in memory_binary, not here)
+        :persistent_term.put({__MODULE__, :growth}, Enum.to_list(1..200))
+
+        receive do
+          :never -> :ok
+        end
+      end)
+
+    on_exit(fn ->
+      Process.exit(grow, :kill)
+      :persistent_term.erase({__MODULE__, :growth})
+    end)
+
+    [[atoms, tables, terms, term_bytes]] =
+      Porthole.query!(
+        """
+        SELECT atom_count_delta, ets_count_delta, persistent_term_count_delta,
+               persistent_term_memory_delta
+        FROM system
+        """,
+        window_ms: 200
+      ).rows
+
+    assert {atoms >= 1, tables >= 1, terms, term_bytes >= 1_000} == {true, true, 1, true},
+           inspect({atoms, tables, terms, term_bytes})
+  end
+
   test "the schema lists every table, without collecting the ones not named" do
     result = Porthole.query!("SELECT name, sql FROM sqlite_master ORDER BY name")
     names = Enum.map(result.rows, &hd/1)

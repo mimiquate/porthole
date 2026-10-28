@@ -52,7 +52,13 @@ in the team-setup guide.
   `recon_alloc`, read-only.
 - **`system` counts garbage collections and port I/O:** `gc_count`,
   `gc_bytes_reclaimed`, `io_input_bytes` and `io_output_bytes`, with
-  `_delta` columns over a window.
+  `_delta` columns over a window. It also reports `persistent_term`
+  (`persistent_term_count`, `persistent_term_memory`), and `atom_count` and
+  `ets_count` get `_delta` columns.
+- **Finding a leak** (cookbook): tell a leak from fragmentation or native
+  memory, find which kind of data grows and where (process state, processes
+  that never exit, binaries held by idle processes, ETS, atoms, persistent
+  terms), and compare two snapshots minutes apart for slow leaks.
 
 ## 0.1.1 - 2026-10-07
 

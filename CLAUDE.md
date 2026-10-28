@@ -539,7 +539,11 @@ All of these are answered with one query each in `test/porthole/eval_test.exs` a
 ## Working conventions
 
   Also GC and port I/O counters (`gc_count`, `gc_bytes_reclaimed`, `io_input_bytes`,
-  `io_output_bytes`), with deltas (2026-10-28).
+  `io_output_bytes`), `persistent_term` count and memory (`persistent_term:info/0`; large
+  binaries in terms count in `memory_binary`), all with deltas, and deltas for `atom_count`
+  and `ets_count` (2026-10-28). The cookbook's "Finding a leak" section uses them with
+  `allocators` and `processes`; slow leaks are found by comparing two snapshots minutes
+  apart (Porthole keeps no history, by design).
 - `allocators`: one row per memory allocator (`erlang:system_info({allocator, A})`, OTP 23+
   format: per instance, `mbcs`/`sbcs`/`mbcs_pool` with `blocks` [{type, [{size, ...}]}]
   and `carriers_size`): used (blocks) vs allocated from the OS (carriers), unused,

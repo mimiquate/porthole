@@ -336,6 +336,110 @@ ORDER BY input_delta + output_delta DESC
 LIMIT 10;
 ```
 
+## Finding a leak
+
+Memory that keeps growing has three possible causes, and they look the same
+from outside: something holds more and more data (a leak), the VM keeps
+memory it no longer uses (fragmentation), or memory is used outside the VM
+(native code). Classify first, then look in the right place.
+
+**1. Leak or fragmentation?** Over a window, a leak grows what is *in use*;
+fragmentation grows what is taken from the OS while use stays flat:
+
+```sql
+-- window_ms: 5000
+SELECT node, sum(used_bytes_delta) AS in_use_growth,
+       sum(allocated_bytes_delta) AS from_os_growth,
+       sum(unused_bytes) / 1048576 AS held_unused_mb
+FROM allocators
+GROUP BY node;
+```
+
+If the OS reports much more memory than `sum(allocated_bytes)`, the memory
+is outside the VM (NIFs, native libraries), which Porthole cannot see.
+
+**2. What kind of data is growing?** One row per node, growth by category:
+
+```sql
+-- window_ms: 5000
+SELECT node, memory_processes_delta, memory_binary_delta, memory_ets_delta,
+       process_count_delta, port_count_delta, ets_count_delta,
+       atom_count_delta, persistent_term_memory_delta
+FROM system;
+```
+
+Then follow the category that grows:
+
+**Process memory: whose state keeps growing?**
+
+```sql
+-- window_ms: 5000
+SELECT initial_call, application, count(*) AS processes,
+       sum(memory) / 1048576 AS memory_mb, sum(memory_delta) AS growth
+FROM processes
+GROUP BY initial_call, application
+ORDER BY growth DESC
+LIMIT 10;
+```
+
+**Process count: what is spawned and never exits?** Processes that started
+during the window have no earlier values, so their deltas are `NULL`:
+
+```sql
+-- window_ms: 5000
+SELECT initial_call, count(*) AS started_and_still_alive
+FROM processes
+WHERE reductions_delta IS NULL
+GROUP BY initial_call
+ORDER BY started_and_still_alive DESC
+LIMIT 10;
+```
+
+Some churn is normal (request processes, tasks); a kind that only ever
+accumulates is the leak.
+
+**Binaries: who holds them without working?** Large binaries are shared and
+freed only when every process holding a reference has garbage-collected. A
+process that holds a lot while doing little work (it rarely collects) keeps
+them alive: the classic BEAM binary leak.
+
+```sql
+-- window_ms: 5000
+SELECT pid, coalesce(registered_name, initial_call) AS process,
+       binary_memory / 1048576 AS binary_mb, reductions_delta
+FROM processes
+WHERE binary_memory > 1048576
+ORDER BY binary_memory DESC
+LIMIT 10;
+```
+
+High `binary_mb` with a small `reductions_delta` is the pattern. Usual fixes:
+hibernate the process, or copy the small part of a large binary you keep
+(`:binary.copy/1`) instead of holding a slice of it.
+
+**ETS tables, sockets, atoms, persistent terms:** see the ETS and ports
+sections; `atom_count_delta` above zero for long means something converts
+input to atoms (they are never freed), and `persistent_term_memory_delta`
+above zero means terms keep being added.
+
+**3. Slow leaks: compare two snapshots.** Many leaks grow by megabytes per
+hour, too slowly for a window. Run the same query twice, ten or thirty
+minutes apart, and compare the results: what grows between the two is the
+leak. Porthole keeps no history, so the comparison is yours (or your
+agent's):
+
+```sql
+SELECT node, initial_call, count(*) AS processes,
+       sum(memory) / 1048576 AS memory_mb, sum(binary_memory) / 1048576 AS binary_mb
+FROM processes
+GROUP BY node, initial_call
+ORDER BY memory_mb DESC
+LIMIT 20;
+```
+
+The same works for `ets_tables` (size and memory per table) and
+`allocators` (used and allocated per allocator).
+
 ## Cluster and deploys
 
 Applications running different versions on different nodes:
