@@ -53,7 +53,8 @@ defmodule Porthole.Table do
     Porthole.Tables.EtsTables,
     Porthole.Tables.Ports,
     Porthole.Tables.Applications,
-    Porthole.Tables.System
+    Porthole.Tables.System,
+    Porthole.Tables.Allocators
   ]
 
   # Filled during the window by a trace (see Porthole.Trace), not collected

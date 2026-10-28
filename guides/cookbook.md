@@ -45,6 +45,39 @@ SELECT node, memory_total_delta, memory_processes_delta, memory_binary_delta,
 FROM system;
 ```
 
+Garbage collection and I/O rates (per second, over the window):
+
+```sql
+-- window_ms: 5000
+SELECT node, gc_count_delta / 5 AS gcs_per_s, gc_bytes_reclaimed_delta / 5 / 1048576 AS gc_mb_per_s,
+       io_input_bytes_delta / 5 / 1024 AS in_kb_per_s, io_output_bytes_delta / 5 / 1024 AS out_kb_per_s
+FROM system;
+```
+
+The OS says the node uses more memory than `memory_total`? Compare what the
+allocators took from the OS with what the VM reports in use:
+
+```sql
+SELECT a.node, sum(a.allocated_bytes) / 1048576 AS from_os_mb,
+       s.memory_total / 1048576 AS vm_reports_mb,
+       sum(a.unused_bytes) / 1048576 AS held_unused_mb
+FROM allocators a JOIN system s ON s.node = a.node
+GROUP BY a.node;
+```
+
+Which allocators hold memory they are not using (fragmentation), and is it
+growing?
+
+```sql
+-- window_ms: 5000
+SELECT node, allocator, purpose, allocated_bytes / 1048576 AS allocated_mb,
+       round(100.0 * used_bytes / max(allocated_bytes, 1), 1) AS used_pct,
+       unused_bytes_delta, single_block_bytes / 1048576 AS large_blocks_mb
+FROM allocators
+ORDER BY unused_bytes DESC
+LIMIT 5;
+```
+
 ## Processes
 
 What kinds of processes are running, and how many of each?

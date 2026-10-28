@@ -43,6 +43,16 @@ watchdog also stops a trace when its events hold 24 MB, keeping what came.
 Setup flags processes one at a time, without pausing the node. On a busy
 node a trace returns what it read in time, with a note. Measured costs are
 in the team-setup guide.
+### Memory and load
+
+- **`allocators` table:** one row per VM memory allocator, with the bytes it
+  took from the operating system and the bytes in use. The gap is
+  fragmentation, which `erlang:memory/0` does not show: it explains a node
+  whose OS-level memory is well above `system.memory_total`. After recon's
+  `recon_alloc`, read-only.
+- **`system` counts garbage collections and port I/O:** `gc_count`,
+  `gc_bytes_reclaimed`, `io_input_bytes` and `io_output_bytes`, with
+  `_delta` columns over a window.
 
 ## 0.1.1 - 2026-10-07
 

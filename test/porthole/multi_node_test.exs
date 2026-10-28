@@ -73,6 +73,17 @@ defmodule Porthole.MultiNodeTest do
 
     assert Enum.sort(result.rows) == Enum.sort([[to_string(observed)], [to_string(bare)]])
     assert result.errors == []
+
+    # Allocators and the system counters too, by evaluation.
+    result =
+      Porthole.query!(
+        "SELECT count(*), sum(allocated_bytes) > 0, (SELECT gc_count > 0 FROM system) FROM allocators",
+        nodes: [bare]
+      )
+
+    assert [[count, 1, 1]] = result.rows
+    assert count >= 5
+    assert result.errors == []
   end
 
   test "a node without Elixir is reported; the others answer", %{bare: bare, otp_only: otp_only} do

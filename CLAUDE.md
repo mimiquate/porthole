@@ -538,6 +538,14 @@ All of these are answered with one query each in `test/porthole/eval_test.exs` a
 
 ## Working conventions
 
+  Also GC and port I/O counters (`gc_count`, `gc_bytes_reclaimed`, `io_input_bytes`,
+  `io_output_bytes`), with deltas (2026-10-28).
+- `allocators`: one row per memory allocator (`erlang:system_info({allocator, A})`, OTP 23+
+  format: per instance, `mbcs`/`sbcs`/`mbcs_pool` with `blocks` [{type, [{size, ...}]}]
+  and `carriers_size`): used (blocks) vs allocated from the OS (carriers), unused,
+  peak, single-block carriers. Explains RSS above `memory_total` (fragmentation). After
+  recon_alloc (recon 2.5.6 checked), read-only, ~0.5 ms to read; summed on the querying
+  node. Deltas: used, allocated, unused.
 - Write tests with a real test supervision tree and spawned processes. Don't mock the runtime.
   Multi-node tests use `:peer` nodes with only Elixir on their code path (no Porthole, no
   `exqlite`), which proves observed nodes need nothing from Porthole.

@@ -165,6 +165,7 @@ That classifies the incident, and each class has its own next step:
 | `run_queue` persistently > `schedulers_online` | who burns CPU? | `processes.reductions_delta` |
 | `port_pct` high | who opens sockets or files? | `ports` joined with `processes` |
 | `atom_pct` high | something converts input to atoms | (code search; atoms are never freed) |
+| the OS reports more memory than `memory_total` | is memory held but unused (fragmentation)? | `allocators`: `allocated_bytes` vs `used_bytes` |
 | latency up, resources normal | who serializes work? | `message_queue_len`, `waiting_on` |
 
 **Rank and measure.** For example, memory growth over 10 seconds, across the cluster:
