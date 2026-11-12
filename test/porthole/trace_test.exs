@@ -44,7 +44,9 @@ defmodule Porthole.TraceTest do
 
     @impl true
     def handle_info(:work, state) do
-      parse(:unexpected)
+      # Through apply/3: a direct call with a value no clause matches is a
+      # type warning on recent Elixir.
+      apply(__MODULE__, :parse, [:unexpected])
       {:noreply, state}
     end
 

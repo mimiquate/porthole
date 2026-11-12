@@ -31,7 +31,11 @@ defmodule Porthole.AuthTest do
       Auth.load!(id: "a", sha256: Auth.hash("x"))
     end
 
-    assert_raise ArgumentError, ~r/must be a list of entries/, fn -> Auth.load!(%{id: "a"}) end
+    # Through apply/3: a direct call with a map is a type warning on recent Elixir.
+    assert_raise ArgumentError, ~r/must be a list of entries/, fn ->
+      apply(Auth, :load!, [%{id: "a"}])
+    end
+
     assert_raise ArgumentError, ~r/needs an :id/, fn -> Auth.load!([[sha256: Auth.hash("x")]]) end
     assert_raise ArgumentError, ~r/needs :sha256/, fn -> Auth.load!([[id: "a"]]) end
 
