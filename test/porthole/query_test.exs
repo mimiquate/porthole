@@ -20,6 +20,90 @@ defmodule Porthole.QueryTest do
              [[0]]
   end
 
+  test "allocators: memory from the OS vs in use, per allocator, described" do
+    result =
+      Porthole.query!("""
+      SELECT allocator, purpose, instances, used_bytes, allocated_bytes, unused_bytes,
+             max_allocated_bytes, single_block_bytes
+      FROM allocators
+      """)
+
+    names = Enum.map(result.rows, &hd/1)
+    assert "eheap_alloc" in names and "binary_alloc" in names and "ets_alloc" in names
+
+    for [_name, purpose, instances, used, allocated, unused, max, single] <- result.rows do
+      assert is_binary(purpose)
+      assert instances >= 1
+      assert allocated >= used and unused == allocated - used
+      assert max >= allocated and single <= allocated
+    end
+
+    # The VM's carriers hold at least what it reports as memory in use.
+    [[allocated, total]] =
+      Porthole.query!(
+        "SELECT (SELECT sum(allocated_bytes) FROM allocators), memory_total FROM system"
+      ).rows
+
+    assert allocated > 0 and total > 0
+
+    # Deltas over a window.
+    assert %{rows: [[_ | _] | _]} =
+             Porthole.query!("SELECT used_bytes_delta, allocated_bytes_delta FROM allocators",
+               window_ms: 50
+             )
+  end
+
+  test "system counts garbage collections and port I/O, as rates over a window" do
+    [[gc_count, gc_bytes, io_in, io_out]] =
+      Porthole.query!(
+        "SELECT gc_count, gc_bytes_reclaimed, io_input_bytes, io_output_bytes FROM system"
+      ).rows
+
+    assert gc_count > 0 and gc_bytes > 0 and io_in >= 0 and io_out >= 0
+
+    # Garbage to collect during the window.
+    spawn(fn -> for _ <- 1..200, do: Enum.to_list(1..1_000) |> length() end)
+
+    [[gc_delta]] =
+      Porthole.query!("SELECT gc_count_delta FROM system", window_ms: 100).rows
+
+    assert gc_delta > 0
+  end
+
+  test "system shows atoms, ETS tables and persistent terms growing over a window" do
+    grow =
+      spawn(fn ->
+        Process.sleep(50)
+        # A new atom, a new ETS table and a new persistent term.
+        String.to_atom("porthole_test_#{System.unique_integer([:positive])}")
+        :ets.new(:porthole_test_growth, [:public])
+        # (a list: large binaries are counted in memory_binary, not here)
+        :persistent_term.put({__MODULE__, :growth}, Enum.to_list(1..200))
+
+        receive do
+          :never -> :ok
+        end
+      end)
+
+    on_exit(fn ->
+      Process.exit(grow, :kill)
+      :persistent_term.erase({__MODULE__, :growth})
+    end)
+
+    [[atoms, tables, terms, term_bytes]] =
+      Porthole.query!(
+        """
+        SELECT atom_count_delta, ets_count_delta, persistent_term_count_delta,
+               persistent_term_memory_delta
+        FROM system
+        """,
+        window_ms: 200
+      ).rows
+
+    assert {atoms >= 1, tables >= 1, terms, term_bytes >= 1_000} == {true, true, 1, true},
+           inspect({atoms, tables, terms, term_bytes})
+  end
+
   test "the schema lists every table, without collecting the ones not named" do
     result = Porthole.query!("SELECT name, sql FROM sqlite_master ORDER BY name")
     names = Enum.map(result.rows, &hd/1)

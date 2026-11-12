@@ -161,12 +161,22 @@ defmodule Porthole.TraceRemoteTest do
 
   test "shapes are computed on a node without Porthole", %{node: node, baseline: baseline} do
     Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
-    # httpd_util (inets) stands for application code: loaded, not refused.
-    {:module, _} = :erpc.call(node, :code, :ensure_loaded, [:httpd_util])
+
+    # The app's own code, loaded on the node as a deploy would (no OTP module
+    # stands in: their functions vary across OTP versions).
+    [{module, binary}] =
+      Code.compile_string("""
+      defmodule Porthole.TraceRemoteTest.App do
+        def parse(%{"rate" => rate}) when is_number(rate), do: {:ok, rate}
+        def parse(_payload), do: {:error, :invalid}
+      end
+      """)
+
+    {:module, _} = :erpc.call(node, :code, :load_binary, [module, ~c"app.beam", binary])
 
     caller =
       :erpc.call(node, :erl_eval, :exprs, [
-        ~c"spawn(fun L() -> httpd_util:collapse_slashes(\"a//b\"), timer:sleep(2), L() end)."
+        ~c"spawn(fun L() -> 'Elixir.Porthole.TraceRemoteTest.App':parse(\#{<<\"rate\">> => 1.5}), timer:sleep(2), L() end)."
         |> :erl_scan.string()
         |> elem(1)
         |> :erl_parse.parse_exprs()
@@ -179,11 +189,11 @@ defmodule Porthole.TraceRemoteTest do
       Porthole.query("SELECT DISTINCT args, result FROM trace_shapes",
         nodes: [node],
         window_ms: 300,
-        trace: %{shapes: ":httpd_util.collapse_slashes/1"}
+        trace: %{shapes: "Porthole.TraceRemoteTest.App.parse/1"}
       )
 
     :erpc.call(node, :erlang, :exit, [caller, :kill])
-    assert {:ok, %{rows: [["(list(4) of integer)", "list(3) of integer"]]}} = result
+    assert {:ok, %{rows: [[~s|(%{"rate" => float})|, "{:ok, float}"]]}} = result
     assert sessions(node) == baseline
     refute :erpc.call(node, :code, :is_loaded, [Porthole.Gather])
   end

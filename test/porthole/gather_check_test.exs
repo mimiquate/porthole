@@ -34,7 +34,9 @@ defmodule Porthole.Gather.CheckTest do
     {:value, evaluated, _} = :erl_eval.expr(expr, :erl_eval.new_bindings())
 
     input = [[1, 2], :skip, [3]]
-    assert evaluated.(self(), input) == module.sizes(self(), input)
+    # The module is compiled at runtime: apply/3 avoids an undefined-function
+    # warning at compile time.
+    assert evaluated.(self(), input) == apply(module, :sizes, [self(), input])
   end
 
   test "Elixir functions other than Enum.reduce/3 fail the build" do

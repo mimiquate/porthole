@@ -140,14 +140,21 @@ defmodule Porthole.Trial do
         args: args
       ])
 
-    {:os_pid, os_pid} = Port.info(tunnel, :os_pid)
+    # nil if it has already exited (its exit_status message is on its way,
+    # and handled below): there is then nothing to kill.
+    os_pid =
+      case Port.info(tunnel, :os_pid) do
+        {:os_pid, os_pid} -> os_pid
+        nil -> nil
+      end
+
     await_tunnel(tunnel, os_pid, executable, args, restarts)
   end
 
   defp await_tunnel(tunnel, os_pid, executable, args, restarts) do
     receive do
       :close ->
-        System.cmd("kill", [to_string(os_pid)], stderr_to_stdout: true)
+        if os_pid, do: System.cmd("kill", [to_string(os_pid)], stderr_to_stdout: true)
 
       {^tunnel, {:data, _}} ->
         await_tunnel(tunnel, os_pid, executable, args, restarts)

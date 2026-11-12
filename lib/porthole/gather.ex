@@ -1241,11 +1241,36 @@ defmodule Porthole.Gather do
     end
   end
 
+  @doc """
+  The VM's memory allocators: for each type, the three sections of each
+  instance (one per scheduler, usually) that say how much memory is
+  allocated from the OS (carriers) and how much is in use (blocks).
+  """
+  @spec allocators(pid()) :: map()
+  def allocators(_caller) do
+    sections = [:mbcs, :sbcs, :mbcs_pool]
+
+    rows =
+      for allocator <- :erlang.system_info(:alloc_util_allocators),
+          instances = :erlang.system_info({:allocator, allocator}),
+          # false when the allocator is disabled.
+          is_list(instances) do
+        {allocator,
+         for {:instance, _number, info} <- instances do
+           :lists.map(fn section -> :lists.keyfind(section, 1, info) end, sections)
+         end}
+      end
+
+    %{rows: rows}
+  end
+
   @doc "VM-wide memory, counts, limits and load."
   @spec system(pid()) :: map()
   def system(_caller) do
     {reductions, _since_last} = :erlang.statistics(:reductions)
     {uptime_ms, _since_last} = :erlang.statistics(:wall_clock)
+    {gc_count, gc_words_reclaimed, _} = :erlang.statistics(:garbage_collection)
+    {{:input, io_input}, {:output, io_output}} = :erlang.statistics(:io)
 
     %{
       memory: :erlang.memory(),
@@ -1262,7 +1287,12 @@ defmodule Porthole.Gather do
       port_limit: :erlang.system_info(:port_limit),
       ets_count: :erlang.system_info(:ets_count),
       ets_limit: :erlang.system_info(:ets_limit),
-      reductions: reductions
+      reductions: reductions,
+      persistent_term: :persistent_term.info(),
+      gc_count: gc_count,
+      gc_bytes_reclaimed: gc_words_reclaimed * :erlang.system_info(:wordsize),
+      io_input: io_input,
+      io_output: io_output
     }
   end
 end

@@ -32,7 +32,9 @@ when a real question needs it.
 
 ### In scope (implemented)
 
-- **Tables:** `processes`, `supervisors`, `ets_tables`, `ports`, `applications`, `system`.
+- **Tables:** `processes`, `supervisors`, `ets_tables`, `ports`, `applications`, `system`,
+  `allocators`; and, filled by a trace, `trace_messages`, `trace_calls`, `trace_exits`,
+  `trace_shapes` (see Tracing below).
 - **Windowed sampling:** the `window_ms` option snapshots tables that declare delta
   columns at the start of the window, collects again at the end, and adds
   `<column>_delta` columns (e.g. `reductions_delta`, `memory_delta`, `size_delta`).
@@ -538,6 +540,18 @@ All of these are answered with one query each in `test/porthole/eval_test.exs` a
 
 ## Working conventions
 
+  Also GC and port I/O counters (`gc_count`, `gc_bytes_reclaimed`, `io_input_bytes`,
+  `io_output_bytes`), `persistent_term` count and memory (`persistent_term:info/0`; large
+  binaries in terms count in `memory_binary`), all with deltas, and deltas for `atom_count`
+  and `ets_count` (2026-10-28). The cookbook's "Finding a leak" section uses them with
+  `allocators` and `processes`; slow leaks are found by comparing two snapshots minutes
+  apart (Porthole keeps no history, by design).
+- `allocators`: one row per memory allocator (`erlang:system_info({allocator, A})`, OTP 23+
+  format: per instance, `mbcs`/`sbcs`/`mbcs_pool` with `blocks` [{type, [{size, ...}]}]
+  and `carriers_size`): used (blocks) vs allocated from the OS (carriers), unused,
+  peak, single-block carriers. Explains RSS above `memory_total` (fragmentation). After
+  recon_alloc (recon 2.5.6 checked), read-only, ~0.5 ms to read; summed on the querying
+  node. Deltas: used, allocated, unused.
 - Write tests with a real test supervision tree and spawned processes. Don't mock the runtime.
   Multi-node tests use `:peer` nodes with only Elixir on their code path (no Porthole, no
   `exqlite`), which proves observed nodes need nothing from Porthole.
