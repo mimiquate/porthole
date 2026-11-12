@@ -65,6 +65,39 @@ defmodule Porthole.EvalTest do
     assert %{"initial_call" => "Shop.Notifications.init/1"} = top
   end
 
+  test "4b. who floods the stuck mailbox (tracing)" do
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace])
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    top =
+      first(
+        """
+        SELECT p.registered_name AS sender, t.tag, count(*) AS sent
+        FROM trace_messages t JOIN processes p ON p.node = t.node AND p.pid = t.sender
+        GROUP BY 1, 2 ORDER BY sent DESC LIMIT 1
+        """,
+        window_ms: 500,
+        trace: %{messages_to: "Shop.Notifications"}
+      )
+
+    assert %{"sender" => "Shop.Orders.EventRelay", "tag" => "order_event"} = top
+  end
+
+  test "9. which input makes a function fail silently (tracing shapes)" do
+    Application.put_env(:porthole, :policy, tiers: [:observe, :trace], trace_shapes: true)
+    on_exit(fn -> Application.delete_env(:porthole, :policy) end)
+
+    {:ok, result} =
+      Porthole.query(
+        "SELECT DISTINCT args, result FROM trace_shapes WHERE outcome = 'error'",
+        window_ms: 300,
+        trace: %{shapes: "Shop.Shipping.Rates.parse/1"}
+      )
+
+    assert [[args, "{:error, :invalid_rate}"]] = result.rows
+    assert args =~ ~s|"rate" => binary(5)|
+  end
+
   test "5. fastest-growing ETS tables over a window, and their owners" do
     top =
       first(

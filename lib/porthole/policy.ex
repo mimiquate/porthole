@@ -2,12 +2,12 @@ defmodule Porthole.Policy do
   @moduledoc """
   What an agent may see, and how much it may ask for.
 
-  Every capability tier is defined, but only `:observe` is implemented:
+  Every capability tier is defined; `:observe` and `:trace` are implemented:
 
   | Tier        | Examples                                  |
   |-------------|-------------------------------------------|
   | `:observe`  | table queries, sampled stats              |
-  | `:trace`    | budgeted trace sessions                   |
+  | `:trace`    | budgeted trace sessions (`Porthole.Trace`) |
   | `:evaluate` | code eval, `:sys.get_state`               |
   | `:mutate`   | kill, `:sys.replace_state`, hot code load |
 
@@ -15,6 +15,9 @@ defmodule Porthole.Policy do
   is `environment ∩ session ∩ request`: tiers and nodes are intersected,
   limits take the minimum. The environment policy comes from
   `config :porthole, :policy, [...]`.
+
+  The environment allows only `:observe` by default: enable tracing with
+  `config :porthole, :policy, tiers: [:observe, :trace]`.
   """
 
   alias Porthole.Error
@@ -38,6 +41,21 @@ defmodule Porthole.Policy do
     identified clients, such as agents connected through MCP).
   * `:max_concurrent` - queries that may run at the same time on the
     querying node, across all clients.
+  * `:max_trace_events` - events a trace may produce on each node before it
+    is stopped (counted as the VM produces them). Events wait in the tracing
+    process until read, under a memory cap: raised far above the default (to
+    ~100k and more), a flood can fill that cap and the trace returns nothing.
+  * `:trace_shapes` - whether traces may record the shapes of a function's
+    arguments and results (`Porthole.Trace`, `shapes`). **Off unless the
+    environment enables it** (`trace_shapes: true`): shapes show map keys as
+    they are, and keys can be personal data (emails, ids). A session or
+    request can turn it off, never on.
+  * `:max_concurrent_traces` - queries with a trace running at the same
+    time, across all clients (default 1): each trace has its own limits on
+    every node it runs on, so this bounds their sum.
+  * `:max_trace_window_ms` - longest window for a trace. Lower than
+    `:max_window_ms`: a sampling window costs nothing while it waits, a trace
+    costs for as long as it runs.
 
   Limits are `:infinity` in a policy that does not set them (see `new/1`);
   every query intersects with the environment policy, which sets them all.
@@ -52,7 +70,11 @@ defmodule Porthole.Policy do
           max_window_ms: limit(),
           timeout_ms: limit(),
           queries_per_minute: limit(),
-          max_concurrent: limit()
+          max_concurrent: limit(),
+          max_trace_events: limit(),
+          max_trace_window_ms: limit(),
+          max_concurrent_traces: limit(),
+          trace_shapes: boolean()
         }
 
   defstruct tiers: [:observe],
@@ -63,7 +85,11 @@ defmodule Porthole.Policy do
             max_window_ms: 60_000,
             timeout_ms: 10_000,
             queries_per_minute: 60,
-            max_concurrent: 4
+            max_concurrent: 4,
+            max_trace_events: 10_000,
+            max_trace_window_ms: 10_000,
+            max_concurrent_traces: 1,
+            trace_shapes: false
 
   @limits [
     :max_rows,
@@ -72,7 +98,10 @@ defmodule Porthole.Policy do
     :max_window_ms,
     :timeout_ms,
     :queries_per_minute,
-    :max_concurrent
+    :max_concurrent,
+    :max_trace_events,
+    :max_trace_window_ms,
+    :max_concurrent_traces
   ]
 
   @doc "All tiers, least to most powerful."
@@ -88,7 +117,8 @@ defmodule Porthole.Policy do
   @spec new(keyword()) :: t()
   def new(opts \\ []) do
     unlimited = for key <- @limits, do: {key, :infinity}
-    struct!(%__MODULE__{tiers: @tiers}, unlimited ++ opts)
+    # Shapes too: a session or request policy only turns them off.
+    struct!(%__MODULE__{tiers: @tiers, trace_shapes: true}, unlimited ++ opts)
   end
 
   @doc """
@@ -114,6 +144,7 @@ defmodule Porthole.Policy do
     struct!(
       %__MODULE__{
         tiers: Enum.filter(a.tiers, &(&1 in b.tiers)),
+        trace_shapes: a.trace_shapes and b.trace_shapes,
         nodes:
           case {a.nodes, b.nodes} do
             {:all, nodes} -> nodes
@@ -125,16 +156,52 @@ defmodule Porthole.Policy do
     )
   end
 
+  @doc """
+  Lets queries trace: adds `:trace` to the environment policy's tiers (for
+  servers configured by flags or environment variables rather than
+  `config :porthole, :policy`).
+  """
+  @spec allow_tracing() :: :ok
+  def allow_tracing do
+    policy = Application.get_env(:porthole, :policy, [])
+    tiers = Keyword.get(policy, :tiers, [:observe])
+
+    Application.put_env(
+      :porthole,
+      :policy,
+      Keyword.put(policy, :tiers, Enum.uniq(tiers ++ [:trace]))
+    )
+  end
+
+  @doc """
+  Lets traces record shapes (`trace_shapes: true` in the environment
+  policy), for servers configured by flags or environment variables. Shapes
+  show map keys, which can be personal data: they are never on by default.
+  """
+  @spec allow_trace_shapes() :: :ok
+  def allow_trace_shapes do
+    policy = Application.get_env(:porthole, :policy, [])
+    Application.put_env(:porthole, :policy, Keyword.put(policy, :trace_shapes, true))
+  end
+
   @doc "Checks that the policy allows `tier` and that it is implemented."
   @spec authorize(t(), tier()) :: :ok | {:error, Error.t()}
   def authorize(%__MODULE__{tiers: tiers}, tier) do
     cond do
       tier not in tiers ->
-        {:error, Error.new(:not_allowed, "the #{tier} tier is not allowed by the policy")}
-
-      tier != :observe ->
         {:error,
-         Error.new(:not_enabled, "the #{tier} tier is not enabled; only observe is available")}
+         Error.new(
+           :not_allowed,
+           "the #{tier} tier is not allowed by the policy" <>
+             if(tier == :trace, do: " (tracing is off unless the server enables it)", else: "")
+         )}
+
+      tier not in [:observe, :trace] ->
+        {:error,
+         Error.new(
+           :not_enabled,
+           "the #{tier} tier is not enabled; only observe and trace are available"
+         )}
 
       true ->
         :ok

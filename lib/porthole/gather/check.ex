@@ -18,7 +18,9 @@ defmodule Porthole.Gather.Check do
     :application_controller,
     :ets,
     :gen_server,
-    :inet
+    :inet,
+    :code,
+    :trace
   ]
   @allowed_elixir [{Enum, :reduce, 3}]
 

@@ -31,6 +31,23 @@ from intended behavior. The full discussion is in
 - **Queries are bounded:** rows and bytes collected, rows returned, time,
   sampling windows, SQLite's memory, and the rate and concurrency of
   queries per client.
+- **Traces are bounded and leave nothing behind.** Tracing is off unless the
+  server enables it. A trace targets what the agent names (never a module of
+  OTP or Elixir), lasts at most 10 s, stops early at an event limit (counted
+  as the VM produces events) or a memory limit, runs one at a time, and runs
+  in an OTP trace session the VM removes, with every setting it made, when the
+  trace ends for any reason. Message and exit traces keep metadata only: a
+  message's sender and kind, an exit's reason class and location, never
+  message contents, arguments or state.
+- **Shapes are the exception, by design.** A `shapes` trace records the
+  structure of a function's arguments and results: types and sizes in place
+  of values, but **atoms and map keys as they are** (string, atom and integer
+  keys alike). In a map keyed by data (emails, user ids, tokens), those keys
+  reach the agent, and through it the
+  model provider. Values (strings, numbers) never leave the node. **Shapes
+  are off unless an operator enables them** (`trace_shapes: true`,
+  `PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes`), separately from tracing,
+  and a token's policy can still turn them off; filtering keys is planned.
 - **The HTTP server authenticates every request** with a per-client bearer
   token (only its SHA-256 hash is stored, compared in constant time),
   rejects browser requests (`Origin`) and bodies over 1 MB, and refuses to

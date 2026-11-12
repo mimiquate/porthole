@@ -1,5 +1,49 @@
 # Changelog
 
+## Unreleased
+
+### Tracing
+
+A query can now record what happens during its window, to answer *who* and
+*why* where snapshots only show *what*. Pass `trace` (MCP tool), `--trace
+KIND=TARGET` (`mix porthole.query`) or `:trace` (`Porthole.query/2`, which
+also accepts modules, names, pids and `{module, function, arity}`) with a
+window, and query the matching table:
+
+- `messages_to` → `trace_messages`: who sends to a process, and what kind of
+  message (its tag, never its contents).
+- `calls` → `trace_calls`: calls and CPU time per process and function, from
+  VM counters (no events).
+- `exits` → `trace_exits`: exits of a process and of every process it
+  starts, with the reason's class and where it was raised (never its data).
+- `shapes` → `trace_shapes`: every call to one function, with the *shapes*
+  of its arguments and result (types and sizes in place of values; atoms and
+  map keys as they are), its outcome (`ok`, `error`, `returned`, `raised`)
+  and its wall-clock duration: for silent `{:error, …}` returns and changed
+  payload formats.
+
+Rows say who each process was (registered name, initial call, who started
+it), identified on the node while the trace runs, so short-lived processes
+are named after they exit.
+
+**Off by default.** Enable tracing with `tiers: [:observe, :trace]`,
+`PORTHOLE_TRACE=true` (sidecar), `--trace` (`fly.up`, `k8s.up`) or
+`--allow-trace` (`mcp`, `server`). **Map keys can be personal data**, so
+shapes need their own opt-in: `trace_shapes: true`,
+`PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes` or `--allow-trace-shapes`. A
+token's policy can turn either off, and agents are only told about what
+their token allows.
+
+**Bounded.** Each trace runs on the node by evaluation (nothing installed),
+in an OTP trace session the VM removes, with every setting it made, when the
+trace ends for any reason (window over, query abandoned, connection lost).
+New policy limits: `max_trace_window_ms` (10 s), `max_trace_events` (10,000
+per node, counted as events are produced), `max_concurrent_traces` (1). A
+watchdog also stops a trace when its events hold 24 MB, keeping what came.
+Setup flags processes one at a time, without pausing the node. On a busy
+node a trace returns what it read in time, with a note. Measured costs are
+in the team-setup guide.
+
 ## 0.1.1 - 2026-10-07
 
 - `fly.up` / `k8s.up` reopen the temporary tunnel they check the sidecar

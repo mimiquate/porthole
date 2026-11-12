@@ -4,14 +4,26 @@ defmodule Porthole.PolicyTest do
 
   alias Porthole.{Error, Policy}
 
-  test "every tier is defined, only observe is implemented" do
+  test "every tier is defined, observe and trace are implemented" do
     policy = Policy.new()
     assert Policy.tiers() == [:observe, :trace, :evaluate, :mutate]
     assert :ok = Policy.authorize(policy, :observe)
+    assert :ok = Policy.authorize(policy, :trace)
 
-    for tier <- [:trace, :evaluate, :mutate] do
+    for tier <- [:evaluate, :mutate] do
       assert {:error, %Error{reason: :not_enabled}} = Policy.authorize(policy, tier)
     end
+  end
+
+  test "shapes are off unless the environment turns them on; other layers only turn them off" do
+    refute Policy.environment().trace_shapes
+    # A session or request policy does not constrain them unless it says so.
+    assert Policy.new().trace_shapes
+    refute Policy.intersect(Policy.environment(), Policy.new()).trace_shapes
+
+    on = struct!(Policy, trace_shapes: true)
+    assert Policy.intersect(on, Policy.new()).trace_shapes
+    refute Policy.intersect(on, Policy.new(trace_shapes: false)).trace_shapes
   end
 
   test "tiers missing from the policy are not allowed" do

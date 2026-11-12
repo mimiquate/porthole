@@ -39,8 +39,161 @@ when a real question needs it.
 - **Term summarization:** arbitrary terms (labels, child ids) are rendered with `inspect/2`
   when small, or as a JSON *shape* (type, size, keys, truncated preview), always within
   256 bytes. Drill-down is not implemented.
-- **Policy struct** with all capability tiers defined. Only `:observe` is implemented;
-  every other tier returns a clear "not enabled" error.
+- **Policy struct** with all capability tiers defined. `:observe` and `:trace` are
+  implemented; `:evaluate` and `:mutate` return a clear "not enabled" error.
+- **Tracing** (`Porthole.Trace`, the `trace` tier; implemented 2026-10-23, off unless the
+  environment policy allows it: `tiers: [:observe, :trace]`, sidecar `PORTHOLE_TRACE=true`,
+  `--trace` on `fly.up`/`k8s.up`, `--allow-trace` on `mcp`/`server`, and `--trace KIND=TARGET`
+  on `mix porthole.query`). No new tool: `query` takes a `trace` argument (one key), run
+  during `window_ms` (required), filling a table joinable with the others; what is traced
+  comes only from the validated argument, never from the SQL (trace tables named without
+  the matching trace, or a trace whose table is not queried, are bad requests). Kinds:
+  `messages_to` → `trace_messages` (sender, receiver, *tag*: the first element of a tuple
+  when an atom, a struct's name, `call:<tag>`/`cast:<tag>` for GenServer requests; nothing
+  else of the message), `calls` → `trace_calls` (`call_time` counters per process and
+  function: no events; refuses preloaded, kernel, stdlib, elixir and compiler modules),
+  `exits` → `trace_exits` (the target and its `$ancestors` descendants, with `procs` +
+  `set_on_spawn` so restarts are traced; reason *class* only, VM errors named as Elixir
+  exceptions, and location). `Porthole.Gather.trace/7` (events) and `trace_calls/5` (counters) run on the node by evaluation
+  (allowed modules gained `:trace` and `:code`). Policy limits `max_trace_events` (10,000 per
+  node) and `max_trace_window_ms` (10 s: lower than `max_window_ms`, since a trace costs while
+  it runs). Trace notes are `:cut` (event limit, unread events, rows: `truncated`) or `:info`
+  (nothing traced on a node: not `truncated`). Notes say when a trace stopped at the limit, read only part of its events, or found
+  nothing to trace (not running, not loaded, refused, no such function).
+  Implementation lessons:
+  - A message sent by registered name has the *name* as its receiver in send match specs:
+    the match spec lists the pid and the registered name (by-name sends were missed).
+  - `call_time` counts running time only (300 ms of sleep counted 0), excluding other
+    traced functions it calls: documented on `time_us`.
+  - Exit reasons of VM errors are `{function_clause, Stack}` etc., not Elixir exceptions;
+    names are mapped (`FunctionClauseError`, `MatchError`...). Descendants that a crashing
+    process spawns (e.g. log capture) appear too, usually as `normal`.
+  - Reading at low priority on a saturated node (8 flooders) took 7–14 s for 10k events,
+    close to the deadline (window + timeout): the tracer stops reading `read_ms` (3/4 of
+    the timeout) after the trace stops and returns what it read, with a note. Measured
+    after the fix: idle 2–4 s, saturated 8 s with 8.4k events; the flood stopped after
+    12–50 ms; sessions always gone. Events beyond the limit are left unread (freed at exit).
+  - The window's end must be checked while reading, not only in `receive ... after`
+    (which fires only on an empty mailbox): a sender just faster than the tracer reads kept
+    traces running past their window until the event limit or the heap cap (found in
+    review, 2026-10-23; the evaluated tracer reads only ~20k events/s on a quiet laptop, and
+    a backlog of ~200k events reaches the heap cap, losing the results; the default 10k
+    limit keeps the backlog small).
+  - First real use (ex-tools, 2026-10-23): agents could not say what short-lived senders or
+    exited processes were (gone before they could look them up), so the tracer identifies
+    them on the node (registered name, `$initial_call` or initial call), cached per pid:
+    senders when their first event is read; for `exits`, the subtree at the start and each
+    child at its `spawn` event, falling back to the spawn MFA (`gen:init_it` args give the
+    callback module) when it is already gone. Two overreaches also came from the docs:
+    `messages_to` cannot see timer messages (the VM sends them) nor `GenServer.call`
+    replies (sent to an alias, not the pid), and `time_us` was read as latency; both are
+    now spelled out in the column docs the agent sees.
+  - Second real use (2026-10-23): tasks (Ecto preloads, `Task.async`) showed as
+    `:erlang.apply/2`, so rows also say who started each process: the first of `$callers`
+    (who a task works for) or of `$ancestors`, or for an exit the spawn event's parent.
+    A sender that exits the instant it sends cannot be asked anything (NULL).
+  - Cost at 100k processes (2026-10-23, laptop, a probe recording its longest scheduling
+    gap): `trace:process(S, all, ...)` paused other processes 16–19 ms (it flags every
+    process in one blocking step; ~170 ms expected at 1M), so `messages_to` and `calls` set
+    `new_processes` in one call and flag existing processes one at a time from the
+    low-priority tracer (try/catch: they may exit meanwhile): pauses back to noise (~1–3 ms),
+    setup 0.2–0.35 s, and the window now starts after setup. Ending any session makes
+    `erts_trace_cleaner` (a VM process) walk every process: ~650k reductions at 100k, with
+    no measurable pause (`exits`, which flags few processes, costs the same cleanup).
+  - **Shapes** (2026-10-26, branch `trace-shapes`): `{"shapes": "Mod.fun/arity"}` →
+    `trace_shapes`, one row per call with argument and result shapes, outcome and wall-clock
+    `duration_us` (call and return events, paired per process with a stack). The input
+    and output trace is the legitimate gap next to error trackers (which see what raises,
+    with history): silent `{:error, ...}` returns, format drift, latency. Decisions: show
+    every map key (cut at 64 bytes, 16 per map), atoms too, never other values; be loud
+    about it in the docs; key filtering is a later privacy enhancement. **Opt-in** (the
+    user, 2026-10-26: teams must never find out by mistake that personal data reached an
+    agent): `trace_shapes` is off in the environment policy unless enabled (`true`,
+    `PORTHOLE_TRACE_SHAPES=true`, `--trace-shapes` on `fly.up`/`k8s.up`,
+    `--allow-trace-shapes` on `mcp`/`server`); session and request policies can only turn
+    it off; the tool description mentions shapes only where enabled. Measured (spike): +370 ns per call for return events alone, +800
+    ns with call events, bounded by the event limit (5,000 calls); evaluated shapes cost
+    1–41 µs per term. `{message, false}` in a match spec suppresses the call event but
+    keeps return/exception events. Demo: `Shop.Shipping.Rates.parse/1` (eval question 9).
+    Review findings: sorting a map's keys to take 16 cost 64 ms for 100k keys, per call
+    (now `:maps.iterator`/`next`, ~2 ms; maps of up to 32 keys still come sorted); call
+    events copy the arguments, so a function called often with MB-sized arguments gets its
+    tracer killed at the heap cap (by design): the collector now explains `:killed` instead
+    of "collection failed: :killed".
+  - Shapes measured end to end (2026-10-26, a peer without Porthole, the app module loaded
+    on it, a 1.2 KB order payload, 4.9 KB in memory): a hot loop and a saturated node got
+    the tracer killed at its 32 MB heap cap: copying arguments into events reaches it long
+    before 10k events, and on the heap a GC moving a backlog in tripped the cap first. Fixed
+    for every trace kind: the tracer queues off heap (`message_queue_data: off_heap`,
+    process memory still counts the queue), the watchdog also stops the trace at 24 MB of
+    process memory (`stopped: :memory`, events kept, a note), and the heap cap is 48 MB as a
+    backstop. After: hot loop ~4,900 calls in 1.8–2.8 s; 500 calls/s all of them (~1,600 in
+    5 s); saturated 800–1,100 calls with the too-busy note, ~13 s; +2.2–3.7 µs per traced
+    call with that payload; node memory +15–36 MB at peak; no session left.
+  - Review of the memory handling (2026-10-26): the watchdog's message waits behind the
+    backlog, so a slow tracer reached the window's end first and reported `:window`, losing
+    why the trace was cut and overstating coverage; the watchdog now sends its reason and
+    time, checked after `read`. Times (`at_ms`, `elapsed_ms`) are from the window's start,
+    after setup. `max_concurrent_traces` (1) in the policy and `Porthole.Limiter`: up to
+    `max_concurrent` traces could run on a node, each with its own 24 MB and setup.
+  - `trace_calls/5` review (2026-10-26): `call_time` keeps the counters of processes that
+    exited during the window (checked: 100 short-lived callers, all counted), so calls
+    are not under-reported; but rows were unbounded before the cut to `max_rows` (one per
+    process × function) and the process had no heap cap: now the 48 MB cap and a fold that
+    stops at `max_rows + 1`. Rows name processes still alive at the end (helpers copied
+    from `trace/7`, since evaluated functions cannot share them); times from the window's
+    start.
+  - Opt-in review (2026-10-26): enforcement was right everywhere, but `tools/list` described
+    tracing and shapes from the environment policy alone, so a token without them was still
+    told about them (then refused). The description and the `trace` argument now follow the
+    client's effective policy (environment ∩ token).
+  - Parsing and agent-text review (2026-10-26): targets capped at 516 bytes (names are
+    atoms); Elixir callers may pass modules, names, pids and `{m, f, a}` (agents send text);
+    the tool description states the 10 s window, the memory limit, one trace at a time, and
+    that exited processes are identified by the rows' columns, not by joining `processes`;
+    `trace_calls` says its process is the one *running* the function (a GenServer's callbacks:
+    the server). `Porthole.Trace`'s doctests were never run (one was broken): now they are.
+    With multi-MB arguments every few ms, either the watchdog stops the trace (rows kept) or
+    the 48 MB heap cap kills it first (several large events read between GCs): both explained.
+  - Flags set on every process (`flag_all`) belong to the session and are removed with it,
+    including the default for new processes: checked with `trace:session_info(Pid)` before,
+    during and after each kind (2026-10-26), and guarded by a remote test.
+  - Tests: `trace_test.exs` (local) and `trace_remote_test.exs` (peer with only Elixir:
+    evaluation, nothing loaded, session gone after a normal end, a killed query, a dropped
+    connection, and a flood). Eval question 4b: who floods the stuck mailbox
+    (`Shop.Orders.EventRelay`, `order_event`), the blind eval's one miss.
+  Spike 2026-10-22 (OTP 29 laptop, `:peer` nodes with only Elixir, all code evaluated on the
+  node with `:erl_eval`, as collection is):
+  - **Cleanup is done by the VM.** A session handle keeps its session alive; when the
+    process holding it dies, the session and all its settings are removed. Verified: holder
+    exits, is killed, the querying node dies (holder linked to it), the connection drops
+    (with a hidden querying node; a visible one gets disconnected by `global`). A copy of
+    the handle on another node does not keep it alive. So: the holder lives on the observed
+    node, linked to the query process, with its own deadline. No guard of our own needed.
+  - **Isolation:** a Porthole session tracing a function that `dbg`/`erlang:trace` already
+    traces leaves the other tracer working, during and after. The tracer's own calls are not
+    traced.
+  - **Counters (no messages), 2M calls to `Integer.to_string/1`, ~74 ns each:** `call_count`
+    not measurable, `call_memory` +19 ns, `call_time` +88 ns (~2× on a trivial function).
+    `call_time`/`call_memory` need the `call` flag on processes; with it on every process,
+    untraced functions cost nothing measurable.
+  - **Events flood an evaluated tracer.** Counting the events it reads, the tracer stopped
+    with 18k / 82k / 1.8M events queued for budgets of 1k / 10k / 100k (up to 578 MB): the
+    VM produces far faster than interpreted code reads. The budget must count events
+    *produced*: (1) on each event, stop when read + queued ≥ budget; (2) a max-priority
+    watchdog (holds the handle, checks the tracer's queue every 1 ms; nearly no work);
+    (3) `max_heap_size` with kill as a backstop (loses the results). All three, budget 10k:
+    10.3k–12.8k events delivered, ~2–2.5 MB, idle or CPU-saturated node. Without the
+    watchdog, a low-priority tracer on a saturated node falls behind. Keep budgets ~10k:
+    reading 100k events at low priority on a saturated node took >30 s.
+  - **"Who sends to X":** `trace:send/3` with a match spec on the receiver plus the `send`
+    flag on every process: 1M unrelated sends 144 → 212 ms (+~70 ns each), zero events.
+    Send trace messages carry the message itself (copied to the tracer; no way to drop it
+    without a NIF tracer module), so the heap cap matters there. Call traces can drop
+    arguments with the `arity` process flag.
+  - **Unloaded modules:** `trace:function` on a module not loaded yet matches 0 functions
+    and the module then loads untraced (interactive-mode code loading). Check the count and
+    say so.
 - **Front doors:**
   - CLI: `mix porthole.query` (local, `--demo`, or `--connect` to a running node)
   - remote shell / IEx: `Porthole.print/2`
@@ -138,7 +291,9 @@ when a real question needs it.
 
 ### Out of scope (for now)
 
-- Tracing (planned next tier: budgeted, session-scoped, using OTP 27+ trace sessions)
+- Tracing beyond the first version: exceptions with a *shape* mode (structure of arguments
+  and returns without values) for integration incidents is next; values with redaction
+  later; never breakpoints or pausing processes. See Tracing above.
 - Eval, `:sys.get_state`, any mutation
 - History / continuous collection / persistence (that is closer to a telemetry product)
 - Joining with static program data (xref / call graph); planned later
@@ -355,6 +510,8 @@ into the MCP tool description, so keep them short and useful to an agent.
 - `system`: one row per node: memory by category, process/atom/port/ETS counts vs limits,
   run_queue, schedulers, reductions, uptime. The starting point of most investigations.
   Scheduler utilization is deliberately absent (it requires flipping a VM flag).
+- Trace tables (`Table.traces/0`, filled during the window by the `trace` argument, see
+  Tracing): `trace_messages`, `trace_calls`, `trace_exits`.
 
 ## Eval set (replace with real incidents from client work)
 
@@ -370,8 +527,11 @@ shell/remote console access.
 7. Are there orphaned processes (no links, no monitors, not supervised)?
 8. Which application's processes account for most memory?
 
+9. Which input makes a function fail silently (a trace of shapes)?
+
 Added beyond the original set: is any VM limit getting close (`system`)? Who is leaking
-sockets (`ports`)? Is there a deadlock (recursive CTE over `waiting_on`)?
+sockets (`ports`)? Is there a deadlock (recursive CTE over `waiting_on`)? Who floods the stuck
+mailbox (4b, a trace: `trace_messages`)?
 
 All of these are answered with one query each in `test/porthole/eval_test.exs` against
 `Porthole.Demo`.

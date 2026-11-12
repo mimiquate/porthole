@@ -21,6 +21,7 @@ defmodule Porthole.Demo do
   | `:shop_import_watcher`           | unlinked, unmonitored, unsupervised (orphan)     | 7    |
   | `Shop.Metrics.Reporter`          | opens UDP sockets, never closes them (≤ 200)     | -    |
   | `Shop.Cart` / `Shop.Promotions`  | call each other: deadlocked                      | -    |
+  | `Shop.Shipping.Quotes`           | one carrier's rate arrives as a string: `Shop.Shipping.Rates.parse/1` returns `{:error, :invalid_rate}` and the quote silently falls back to a flat rate | 9 |
 
   Start it with `start/1` (e.g. `iex -S mix run -e 'Porthole.Demo.start()'`)
   and stop it with `stop/0`. It grows without bound by design: don't leave it
@@ -88,7 +89,8 @@ defmodule Shop.Application do
       {Shop.Metrics.Reporter, tick},
       # Deadlocked, so they cannot stop gracefully.
       Supervisor.child_spec(Shop.Cart, shutdown: :brutal_kill),
-      Supervisor.child_spec(Shop.Promotions, shutdown: :brutal_kill)
+      Supervisor.child_spec(Shop.Promotions, shutdown: :brutal_kill),
+      {Shop.Shipping.Quotes, tick}
     ]
 
     Supervisor.start_link(children, strategy: :one_for_one, name: Shop.Supervisor)
@@ -358,4 +360,59 @@ defmodule Shop.Promotions do
 
   @impl true
   def handle_call(:active, _from, state), do: {:reply, [], state}
+end
+
+defmodule Shop.Shipping.Rates do
+  @moduledoc false
+  # Parses a carrier's quote payload.
+
+  def parse(%{"carrier" => carrier, "rate" => rate, "currency" => currency})
+      when is_number(rate) do
+    {:ok, %{carrier: carrier, cents: round(rate * 100), currency: currency}}
+  end
+
+  def parse(%{"rate" => _}), do: {:error, :invalid_rate}
+  def parse(_payload), do: {:error, :invalid_payload}
+end
+
+defmodule Shop.Shipping.Quotes do
+  @moduledoc false
+  # Asks each carrier for a quote every tick; uses a flat rate when a quote
+  # cannot be read.
+  use GenServer
+
+  @flat_cents 999
+
+  def start_link(ms), do: GenServer.start_link(__MODULE__, ms, name: __MODULE__)
+
+  @impl true
+  def init(ms) do
+    send(self(), :quote)
+    {:ok, %{ms: ms, quotes: %{}}}
+  end
+
+  @impl true
+  def handle_info(:quote, state) do
+    quotes =
+      for payload <- payloads(), into: %{} do
+        cents =
+          case Shop.Shipping.Rates.parse(payload) do
+            {:ok, quote} -> quote.cents
+            {:error, _reason} -> @flat_cents
+          end
+
+        {payload["carrier"], cents}
+      end
+
+    Process.send_after(self(), :quote, state.ms)
+    {:noreply, %{state | quotes: quotes}}
+  end
+
+  defp payloads do
+    [
+      %{"carrier" => "ups", "rate" => 12.5, "currency" => "USD", "service" => "ground"},
+      %{"carrier" => "fedex", "rate" => 14.25, "currency" => "USD", "service" => "express"},
+      %{"carrier" => "dhl", "rate" => "13.10", "currency" => "USD", "service" => "ground"}
+    ]
+  end
 end

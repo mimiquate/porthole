@@ -95,7 +95,23 @@ defmodule Porthole.MCP do
   end
 
   defp request("ping", _params, _context), do: {:ok, %{}}
-  defp request("tools/list", _params, _context), do: {:ok, %{tools: [tool()]}}
+  # Described as this client may use it: the environment policy narrowed by
+  # the client's own (a token's), so an agent is not told about traces or
+  # shapes it would be refused.
+  defp request("tools/list", _params, context) do
+    policy =
+      Porthole.Policy.intersect(
+        Porthole.Policy.environment(),
+        context.opts[:policy] || Porthole.Policy.new()
+      )
+
+    tool =
+      if :trace in policy.tiers,
+        do: tool(policy),
+        else: update_in(tool(policy), [:inputSchema, :properties], &Map.delete(&1, :trace))
+
+    {:ok, %{tools: [tool]}}
+  end
 
   defp request("tools/call", %{"name" => "query", "arguments" => %{"sql" => sql} = args}, context)
        when is_binary(sql) do
@@ -103,7 +119,8 @@ defmodule Porthole.MCP do
       for {key, value} <- [
             window_ms: args["window_ms"],
             only_nodes: args["nodes"],
-            all_supervisors: args["all_supervisors"]
+            all_supervisors: args["all_supervisors"],
+            trace: args["trace"]
           ],
           value != nil,
           do: {key, value}
@@ -129,10 +146,10 @@ defmodule Porthole.MCP do
 
   defp request(method, _params, _context), do: {:error, -32601, "method not found: #{method}"}
 
-  defp tool do
+  defp tool(policy) do
     %{
       name: "query",
-      description: description(),
+      description: description(policy),
       inputSchema: %{
         type: "object",
         properties: %{
@@ -153,6 +170,45 @@ defmodule Porthole.MCP do
               "supervisors table: scan every process instead of the applications' " <>
                 "supervision trees, to also find supervisors outside them. Slow on large " <>
                 "or overloaded nodes. Default false."
+          },
+          trace: %{
+            type: "object",
+            description:
+              "Trace during window_ms (required) and query the results in a trace_* table. " <>
+                "One key, among those below. Only if the server enables tracing.",
+            properties:
+              %{
+                messages_to: %{
+                  type: "string",
+                  description: "Registered name or pid: who sends to it (trace_messages)."
+                },
+                calls: %{
+                  type: "string",
+                  description:
+                    "Module or Module.function/arity of the application: calls and time " <>
+                      "per process (trace_calls)."
+                },
+                exits: %{
+                  type: "string",
+                  description:
+                    "Registered name or pid, e.g. a supervisor: exits of it and of the " <>
+                      "processes it starts, with reasons (trace_exits)."
+                }
+              }
+              |> Map.merge(
+                if shapes?(policy),
+                  do: %{
+                    shapes: %{
+                      type: "string",
+                      description:
+                        "Module.function/arity of the application: each call's argument and " <>
+                          "result shapes, outcome and duration (trace_shapes)."
+                    }
+                  },
+                  else: %{}
+              ),
+            minProperties: 1,
+            maxProperties: 1
           }
         },
         required: ["sql"]
@@ -161,26 +217,62 @@ defmodule Porthole.MCP do
     }
   end
 
-  defp description do
-    tables =
-      for table <- Porthole.schema() do
-        columns = Enum.map_join(table.columns, "\n", &"    #{&1.name} (#{&1.type}): #{&1.doc}")
-
-        sampled =
-          if table.sampled == [],
-            do: "",
-            else: "\n  with window_ms: #{Enum.join(table.sampled, ", ")}"
-
-        "- #{table.name}: #{table.description}\n    node (text)\n#{columns}#{sampled}"
-      end
-
+  defp description(policy) do
     """
     Read-only SQL (SQLite) over the live Erlang/Elixir system. Tables are collected fresh for every \
     query; this is not an atomic snapshot. Every table has a `node` column: join on it as well as on pids. \
     Booleans are 0/1, memory is in bytes. Results are capped: if `truncated` is true, read `notes`. \
     If `errors` is not empty, rows from those nodes are missing from the result.
 
-    #{Enum.join(tables, "\n")}
+    #{Enum.map_join(Porthole.schema(), "\n", &table_description/1)}
+    #{tracing(policy)}\
     """
+  end
+
+  # Described only where this client may trace.
+  defp tracing(policy) do
+    if :trace in policy.tiers do
+      """
+
+      Tracing: pass `trace` (one key) with window_ms to record what happens during the window, \
+      and query the matching table. Join pids with processes (collected at the end of the window) \
+      for processes still alive; for those that exited, use the rows' name, initial_call and \
+      started_by columns. Use it after a snapshot points at a process or module: who floods a \
+      mailbox (messages_to), where a process spends its time (calls), why processes crash \
+      (exits)#{shapes_use(policy)}. A trace lasts at most 10 s and stops early at its event or \
+      memory limit (see notes); one trace runs at a time, so wait for one to end before the next. \
+      messages_to makes every message sent on the node slightly slower while it runs: keep \
+      windows short (a few seconds). Read each table's limits below: \
+      messages_to does not see timer messages or call replies, and trace_calls.time_us is CPU \
+      time, not latency.
+
+      #{Porthole.schema(:traces) |> Enum.reject(&(&1.name == "trace_shapes" and not shapes?(policy))) |> Enum.map_join("\n", &table_description/1)}
+      """
+    else
+      ""
+    end
+  end
+
+  # Shapes are described only where an operator turned them on, and the
+  # client's policy keeps them.
+  defp shapes?(policy), do: :trace in policy.tiers and policy.trace_shapes
+
+  defp shapes_use(policy) do
+    if shapes?(policy),
+      do:
+        ", what a function receives and returns and how long it takes (shapes: silent " <>
+          "{:error, ...} returns, a changed payload format, latency)",
+      else: ""
+  end
+
+  defp table_description(table) do
+    columns = Enum.map_join(table.columns, "\n", &"    #{&1.name} (#{&1.type}): #{&1.doc}")
+
+    sampled =
+      if table.sampled == [],
+        do: "",
+        else: "\n  with window_ms: #{Enum.join(table.sampled, ", ")}"
+
+    "- #{table.name}: #{table.description}\n    node (text)\n#{columns}#{sampled}"
   end
 end

@@ -15,7 +15,9 @@ defmodule Porthole.Collector do
   Porthole waits (or gives up), never the other way around.
 
   With a sampling window, tables with delta columns are read twice, the
-  window apart, on all nodes in parallel; the deltas are computed here.
+  window apart, on all nodes in parallel; the deltas are computed here. A
+  trace (`Porthole.Trace`) runs during that window, on each node, and fills
+  its table.
 
   Nodes answer in parallel and are shaped one at a time, as they arrive
   (`reduce/7`), so the querying node holds one node's rows at a time rather
@@ -25,14 +27,22 @@ defmodule Porthole.Collector do
   alias Porthole.{Gather, Remote, Table}
 
   @typedoc """
-  Rows per table, with whether `max_rows` cut the collection short.
+  Rows per table, with whether `max_rows` cut the collection short, or for a
+  trace table what the trace reported (see `Porthole.Trace.notes/4`).
   """
-  @type tables :: %{String.t() => {[Table.row()], truncated :: false | :rows}}
+  @type tables :: %{String.t() => {[Table.row()], cut()}}
 
-  @typedoc "Per-table, per-node collection limits."
+  @type cut :: false | :rows | {:trace, map()}
+
+  @typedoc """
+  Per-table, per-node collection limits, and the trace to run during the
+  window with its event limit.
+  """
   @type limits :: %{
           required(:max_rows) => pos_integer(),
-          optional(:all_supervisors) => boolean()
+          optional(:all_supervisors) => boolean(),
+          optional(:trace) => Porthole.Trace.t() | nil,
+          optional(:max_events) => pos_integer()
         }
 
   # How long a supervisor may take to answer which_children.
@@ -68,7 +78,7 @@ defmodule Porthole.Collector do
           limits(),
           timeout(),
           acc,
-          (node(), module(), [Table.row()], false | :rows, acc -> acc)
+          (node(), module(), [Table.row()], cut(), acc -> acc)
         ) :: {acc, [{node(), String.t()}]}
         when acc: term()
   def reduce(nodes, names, window_ms, limits, timeout, acc, fun) do
@@ -89,8 +99,9 @@ defmodule Porthole.Collector do
     {acc, errors} =
       Enum.reduce(local, {acc, []}, &handle(&1, gather_node.(&1), tables, &2, fun, timeout))
 
-    # The node enforces each deadline itself; this is only a backstop.
-    deadline = System.monotonic_time(:millisecond) + 2 * timeout + (window_ms || 0) + 2_000
+    # The node enforces each deadline itself; this is only a backstop (a
+    # trace may take a window plus a timeout, between two snapshots).
+    deadline = System.monotonic_time(:millisecond) + 3 * timeout + (window_ms || 0) + 2_000
     await(tasks, deadline, tables, {acc, errors}, fun, timeout)
   end
 
@@ -132,7 +143,14 @@ defmodule Porthole.Collector do
             do: Table.add_deltas(table, elem(table.shape(decode(before[table])), 0), rows),
             else: rows
 
-        acc = fun.(node, table, rows, if(truncated, do: :rows, else: false), acc)
+        cut =
+          case truncated do
+            true -> :rows
+            false -> false
+            {:trace, _report} = trace -> trace
+          end
+
+        acc = fun.(node, table, rows, cut, acc)
         # Give back the heap this table's rows grew, before the next one.
         :erlang.garbage_collect()
         acc
@@ -148,16 +166,46 @@ defmodule Porthole.Collector do
   defp decode(raw) when is_binary(raw), do: :erlang.binary_to_term(raw)
   defp decode(raw), do: raw
 
-  # Reads the tables on `node` (twice for sampled tables, the window apart)
-  # and returns the raw data, unshaped.
+  # Reads the tables on `node` (twice for sampled tables, the window apart,
+  # tracing in between if a trace table is asked for) and returns the raw
+  # data, unshaped.
   defp gather_node(node, tables, window_ms, limits, timeout) do
+    {traced, tables} = Enum.split_with(tables, &Table.traced?/1)
     sampled = if window_ms, do: Enum.filter(tables, &(&1.deltas() != [])), else: []
 
     with {:ok, before} <- snapshot(node, sampled, limits, timeout),
-         :ok <- if(sampled != [], do: Process.sleep(window_ms), else: :ok),
+         {:ok, trace} <- window(node, traced, sampled, window_ms, limits, timeout),
          {:ok, now} <- snapshot(node, tables, limits, timeout) do
-      {:ok, {before, now}}
+      {:ok, {before, Map.merge(now, trace)}}
     end
+  end
+
+  # The window between the two snapshots: a trace, or a sleep.
+  defp window(_node, [], [], _window_ms, _limits, _timeout), do: {:ok, %{}}
+
+  defp window(_node, [], _sampled, window_ms, _limits, _timeout) do
+    Process.sleep(window_ms)
+    {:ok, %{}}
+  end
+
+  defp window(node, [table], _sampled, window_ms, limits, timeout) do
+    # The trace stops if this process goes away (the query was abandoned, or
+    # this node lost the connection).
+    trace_limits = %{
+      querier: self(),
+      trace: limits.trace,
+      window_ms: window_ms,
+      # Most of the deadline after the window, so a busy node returns the
+      # events it read instead of timing out.
+      read_ms: div(timeout * 3, 4),
+      max_events: limits.max_events,
+      max_rows: limits.max_rows
+    }
+
+    {name, args} = table.gather(trace_limits)
+
+    with {:ok, raw} <- gather(node, name, args, window_ms + timeout),
+         do: {:ok, %{table => raw}}
   end
 
   # Reads each table on `node` once, raw.
@@ -193,6 +241,15 @@ defmodule Porthole.Collector do
         "the node may be overloaded, retry later or with a shorter window"
 
   defp describe(:caller_timeout, _timeout), do: "collection timed out"
+
+  # Only a trace's process has a heap cap (Porthole.Gather.trace/7): its
+  # events are copies of what it traces.
+  defp describe(:killed, _timeout),
+    do:
+      "the trace was stopped on this node: its events grew past the memory a trace may " <>
+        "use faster than it could be stopped (they copy what they trace: very large " <>
+        "messages or arguments, often). Trace something that handles smaller data, or use " <>
+        "a shorter window"
 
   defp describe({:old_otp, release}, _),
     do: "Porthole needs OTP 27+, this node runs OTP #{release}"

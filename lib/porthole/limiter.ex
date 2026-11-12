@@ -2,7 +2,7 @@ defmodule Porthole.Limiter do
   @moduledoc """
   Admission control for queries on the querying node.
 
-  Two limits, both from the effective `Porthole.Policy`:
+  Three limits, all from the effective `Porthole.Policy`:
 
     * `:max_concurrent` - queries running at the same time, across all
       clients. Each query walks every process on the observed nodes, so
@@ -10,6 +10,9 @@ defmodule Porthole.Limiter do
     * `:queries_per_minute` - per client, over a sliding minute. Applied to
       identified clients (agents connected through MCP); direct library calls
       carry no client and are only subject to the concurrency limit.
+    * `:max_concurrent_traces` - queries with a trace running at the same
+      time (`Porthole.Trace`). Each trace has its own limits on the nodes
+      (events, memory, setup): one at a time keeps their sum at one trace's.
 
   The limiter monitors each running query's process, so a query that crashes
   or is killed releases its slot. Rejected queries do not count toward the
@@ -30,15 +33,17 @@ defmodule Porthole.Limiter do
   Admits the calling process's query, or explains why not. On success,
   returns a ticket to pass to `release/1` when the query is done.
   """
-  @spec acquire(String.t() | nil, Policy.t()) :: {:ok, reference()} | {:error, Error.t()}
-  def acquire(client, %Policy{} = policy) do
+  @spec acquire(String.t() | nil, Policy.t(), boolean()) ::
+          {:ok, reference()} | {:error, Error.t()}
+  def acquire(client, %Policy{} = policy, trace? \\ false) do
     GenServer.call(
       __MODULE__,
-      {:acquire, client, policy.queries_per_minute, policy.max_concurrent}
+      {:acquire, client, policy.queries_per_minute, policy.max_concurrent,
+       if(trace?, do: policy.max_concurrent_traces)}
     )
   end
 
-  @doc "Releases a slot taken by `acquire/2`."
+  @doc "Releases a slot taken by `acquire/3`."
   @spec release(reference()) :: :ok
   def release(ticket), do: GenServer.cast(__MODULE__, {:release, ticket})
 
@@ -46,7 +51,7 @@ defmodule Porthole.Limiter do
   def init(nil), do: {:ok, %{running: %{}, recent: %{}}}
 
   @impl true
-  def handle_call({:acquire, client, per_minute, max_concurrent}, {pid, _tag}, state) do
+  def handle_call({:acquire, client, per_minute, max_concurrent, max_traces}, {pid, _tag}, state) do
     now = System.monotonic_time(:millisecond)
     recent = recent(state, client, now)
 
@@ -69,10 +74,19 @@ defmodule Porthole.Limiter do
             "#{max_concurrent} queries are already running on this node; retry in a few seconds"
           )}, put_recent(state, client, recent)}
 
+      max_traces != nil and traces(state) >= max_traces ->
+        {:reply,
+         {:error,
+          Error.new(
+            :busy,
+            "a trace is already running (#{max_traces} at a time); retry when it ends, " <>
+              "in a few seconds, or query without a trace"
+          )}, put_recent(state, client, recent)}
+
       true ->
         ticket = Process.monitor(pid)
         state = put_recent(state, client, if(client, do: [now | recent], else: recent))
-        {:reply, {:ok, ticket}, put_in(state.running[ticket], pid)}
+        {:reply, {:ok, ticket}, put_in(state.running[ticket], {pid, max_traces != nil})}
     end
   end
 
@@ -86,6 +100,8 @@ defmodule Porthole.Limiter do
   def handle_info({:DOWN, ticket, :process, _pid, _reason}, state) do
     {:noreply, %{state | running: Map.delete(state.running, ticket)}}
   end
+
+  defp traces(state), do: Enum.count(state.running, fn {_ticket, {_pid, trace?}} -> trace? end)
 
   # Admission times within the last minute, newest first.
   defp recent(_state, nil, _now), do: []

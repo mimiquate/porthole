@@ -299,6 +299,8 @@ All variables:
 | `PORTHOLE_PORT` / `PORTHOLE_BIND` | Where to listen | `4040` / `0.0.0.0` |
 | `PORTHOLE_CERTFILE` / `PORTHOLE_KEYFILE` | Serve HTTPS | |
 | `PORTHOLE_CONFIG` | An Elixir config file for per-token policies and the environment policy | |
+| `PORTHOLE_TRACE` | `true` lets agents trace (see [tracing](#tracing)) | off |
+| `PORTHOLE_TRACE_SHAPES` | `true` lets traces record shapes, which show map keys (see [shapes](#shapes-and-map-keys)); needs `PORTHOLE_TRACE` | off |
 | `RELEASE_NODE` / `RELEASE_DISTRIBUTION` | Override the sidecar's own name / name type | `porthole@<IP>` / `name` |
 
 The sidecar refuses to start without tokens or a place to look, and it logs
@@ -414,6 +416,7 @@ policy and every request is intersected with it, so they can only narrow:
 
 ```elixir
 config :porthole, :policy,
+  tiers: [:observe],         # add :trace to let agents trace (see below)
   nodes: [:"my_app@10.0.1.12", :"my_app@10.0.1.13"],
   # What one query may collect and return.
   max_rows: 50_000,          # rows per table, per node
@@ -423,7 +426,10 @@ config :porthole, :policy,
   timeout_ms: 10_000,        # collection deadline (enforced on each node) and SQL time
   # How much load agents may put on the cluster.
   queries_per_minute: 60,    # per client (token)
-  max_concurrent: 4          # queries running at once, across all clients
+  max_concurrent: 4,         # queries running at once, across all clients
+  max_trace_events: 10_000,  # events one trace may produce per node
+  max_trace_window_ms: 10_000, # longest trace (tracing costs while it runs)
+  max_concurrent_traces: 1     # traces running at once, across all clients
 ```
 
 The values above are the defaults. A token's `policy:` can lower any of them
@@ -442,9 +448,160 @@ When a limit is hit, the query is not silently degraded:
   `busy` (*"4 queries are already running on this node; retry in a few
   seconds"*). Rejected queries do not count toward the rate.
 
-Only the `observe` tier is implemented. The `trace`, `evaluate` and `mutate`
-tiers are defined so policies can be written against them, and they return a
-"not enabled" error.
+The `observe` and `trace` tiers are implemented. `evaluate` and `mutate` are
+defined so policies can be written against them, and they return a "not
+enabled" error.
+
+### Tracing
+
+Snapshots tell an agent *what is*: a mailbox holds 40,000 messages, a
+GenServer is busy, a supervisor restarts a child. A trace records *what
+happens* during the window, to answer *who* and *why*: who sends to that
+mailbox, where that GenServer spends its time, why the child exits. The
+agent passes a `trace` argument with `window_ms` and queries the matching
+table (see the [cookbook](cookbook.md#tracing-who-where-why)):
+
+| `trace` | Table | What it records |
+|---|---|---|
+| `{"messages_to": "<name or pid>"}` | `trace_messages` | Each message sent to that process: sender, kind (`tag`), time |
+| `{"calls": "<Module or Module.fun/arity>"}` | `trace_calls` | Calls and running time per process and function (counters) |
+| `{"exits": "<name or pid>"}` | `trace_exits` | Exits of that process and of every process it starts: reason class, where |
+| `{"shapes": "<Module.fun/arity>"}` | `trace_shapes` | Each call to that function: the shapes of its arguments and result, its outcome and its wall-clock duration |
+
+**Tracing is off by default.** Enable it on the server with
+`tiers: [:observe, :trace]` in the environment policy, `PORTHOLE_TRACE=true`
+for the sidecar image, `--trace` with `mix porthole.fly.up` and `k8s.up`, or
+`--allow-trace` with `mix porthole.mcp` and `mix porthole.server`. A token's
+policy can still leave it out (`policy: [tiers: [:observe]]`).
+
+What a trace keeps, and what it doesn't:
+
+- **Metadata only, except shapes.** `trace_messages` keeps the sender, the time and the
+  message's *tag* (its first element when it is an atom, a struct's name,
+  or `call:<tag>` / `cast:<tag>` for GenServer requests), never the rest of
+  the message. `trace_exits` keeps the reason's *class* (`FunctionClauseError`,
+  `badarg`, `shutdown`) and where it was raised, never the arguments or state
+  that crash reasons often carry. The rest is dropped on your node.
+- **Who each process was.** Rows name their processes, identified on your
+  node while the trace runs (registered name and initial call, as in
+  `processes`, and who started them: the process a task works for, or its
+  parent), so short-lived senders, exits and callers are named even though
+  they are gone by the time the agent reads the result. `calls` asks at the
+  end of the window, so it names only the processes still alive then.
+- **Only the application's code.** `calls` and `shapes` refuse modules of
+  OTP and Elixir themselves (`:lists`, `Enum`, `:gen_server`): tracing them
+  would slow down everything on the node. Libraries you depend on (Phoenix,
+  Ecto, Oban…) are allowed.
+- **Not every message.** `messages_to` sees messages sent by processes of the
+  same node. It does not see timer messages (`Process.send_after`, `:timer`,
+  which the VM delivers), replies to the process's own calls (a
+  `GenServer.call` reply goes to an alias, not to the pid), or messages from
+  other nodes. A process driven by timers can show no rows while it is busy.
+- **CPU time, not latency.** `trace_calls.time_us` counts time spent
+  running a function, not waiting: a function that waits 200 ms on the
+  database shows a few microseconds.
+
+The agent's tool description explains all this when tracing is enabled, and
+the audit log records each trace's target.
+
+#### Shapes and map keys
+
+A `shapes` trace answers what a function receives and returns *right now*:
+the case of a third party that changed its payload format, or a function
+that quietly returns `{:error, …}` while the code falls back to a default.
+Error trackers only see what raises; shapes see every call. For each call it
+records the **shape** of the arguments and of the result, its outcome (`ok`,
+`error`, `returned`, `raised`) and its wall-clock duration:
+
+```text
+args:    (%{"carrier" => binary(3), "currency" => binary(3), "rate" => binary(5)})
+result:  {:error, :invalid_rate}
+```
+
+A shape replaces every value with its type and size (`binary(5)`, `float`,
+`list(20) of %{...}`), **but keeps atoms and map keys as they are**: they are
+what makes a shape useful (`"rate"` became a string), and in most code they
+are names, not data.
+
+> **Warning: map keys can be personal data.** A map keyed by emails, user ids
+> or tokens (`%{"ann@example.com" => ...}`, `%{4821 => ...}`) shows those keys
+> to the agent, and through the agent to its model provider: string, atom
+> **and integer** keys alike. Strings, numbers and other values never leave
+> your node, but keys do: up to 16 per map (sorted for maps of up to 32 keys,
+> in no particular order for larger ones), cut at 64 bytes.
+>
+> **So shapes are off unless you enable them,** separately from tracing:
+> `trace_shapes: true` in the environment policy, `PORTHOLE_TRACE_SHAPES=true`
+> for the sidecar, `--trace-shapes` with `mix porthole.fly.up` and `k8s.up`, or
+> `--allow-trace-shapes` with `mix porthole.mcp` and `mix porthole.server`.
+> Enable them only for code whose maps you know are keyed by names, not data.
+> A token's policy can still turn them off for one client
+> (`policy: [trace_shapes: false]`). Agents are only told about what their
+> own token allows: without shapes, the tool's description and arguments
+> don't mention them (without the `trace` tier, tracing at all), and a
+> request for them says why they are off. Filtering
+> keys that look like data is planned.
+
+Shapes trace one function at a time (`Module.fun/arity`), of your
+application, never of OTP or Elixir. Each call's event copies its arguments
+into the tracing process: with large arguments (a big cache or state), a
+trace reaches its memory limit (below) after a few calls and returns those as
+a sample, with a note; with arguments of several megabytes, called often, the
+backstop may stop it first, and the agent gets an error saying so. Pick a
+function that handles the payload rather than the whole state.
+
+#### How a trace is bounded
+
+A trace runs in its own OTP trace session (OTP 27+), next to any tracing your
+team already does with `dbg` or `recon`, without disturbing it. The session
+belongs to a process on your node, and the VM removes the session and every
+trace setting it made as soon as that process ends, whatever the reason.
+It ends at the end of the window, when the query is abandoned, or when the
+connection to the sidecar drops; it also stops itself:
+
+- **at the end of its window**, at most `max_trace_window_ms` (10 s by
+  default, shorter than other windows: a trace costs for as long as it runs);
+- **at the event limit** (`max_trace_events`, 10,000 by default per node),
+  counted as the VM *produces* events, not as they are read: on every event,
+  and by a watchdog process that checks every millisecond. Past the limit,
+  the result is a sample of the first part of the window, and `notes` says
+  how long it covers. Raising it lets a trace record more, but events wait in
+  the tracing process until they are read (about 20,000 a second), so a
+  large limit mostly runs into the memory limit below;
+- **at a memory limit**: events copy what they trace (messages,
+  arguments; large binaries are shared, not copied), so the watchdog also
+  stops the trace when they hold 24 MB, keeping what came, with a note; past
+  48 MB of heap the VM itself stops it. A single very large message or
+  argument is copied before anything can react: memory can briefly exceed the
+  limit by that much;
+- **one at a time** (`max_concurrent_traces`, 1 by default): a second
+  tracing query waits for the first to end (it gets a `busy` error with a
+  retry hint), so the cost on a node is at most one trace's, whatever the
+  number of agents;
+- **within the deadline**: on a busy node the trace (at low priority, like
+  all collection) reads its events slowly; what it has not read when its time
+  is up is left out, and `notes` says so, instead of the query failing.
+
+#### What tracing costs
+
+Measured on a laptop (OTP 29, 8 schedulers), on a node without Porthole:
+
+| While a trace runs | Cost |
+|---|---|
+| `calls`: each call to a traced function | +88 ns of running time (~2× on a trivial function; little on real work); call counts alone are free |
+| `calls`: other functions | nothing measurable |
+| `messages_to`: every message sent on the node | +~70 ns (the VM checks whether it is for the target) |
+| `shapes`: each call to the traced function | +2–4 µs with a 1 KB JSON-like payload (a call and a return event, each copying its data; ~0.8 µs with small arguments), plus 1–40 µs to compute the shapes, in the tracing process at low priority. The event limit stops it after ~5,000 calls: a tight loop over that function was covered in ~2–3 s, a function called 500 times a second fully, a saturated node partially (800–1,100 calls, with a note) |
+| Any trace: memory on the node | ~15–36 MB at peak in the measurements above (the tracer's queue, held under 24 MB, plus what it processes) |
+| `messages_to` / `calls` / `shapes`: setting up | every process is flagged one at a time at low priority before the window starts (~0.2–0.35 s at 100k processes), without pausing the node; flagging them in one call paused other processes ~17 ms at 100k |
+| Any trace: when it ends | the VM's `erts_trace_cleaner` removes the session's settings from every process: ~7 reductions per process (~650k at 100k processes), with no measurable pause |
+| `messages_to` / `exits`: each recorded event | a copy to the tracing process, read at low priority |
+| A flood (8 processes sending as fast as they can) | stopped at 10,000 events after ~20–50 ms; ~2 MB held while tracing |
+
+Nothing stays behind: we checked that the session is gone after a normal
+end, a killed query and a dropped connection, and that the flags a trace
+sets on every process are removed with it (tests guard both). Keep windows
+short; a few seconds answers most questions.
 
 ### Audit
 

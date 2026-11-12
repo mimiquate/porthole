@@ -15,7 +15,7 @@ defmodule Mix.Tasks.Porthole.Mcp do
 
   @impl true
   def run(args) do
-    {opts, _rest, _parsed} = Porthole.CLI.setup!(args)
+    {opts, _rest, _parsed} = Porthole.CLI.setup!(args, serves: true)
     Porthole.MCP.serve(opts)
   end
 end

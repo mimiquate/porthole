@@ -43,6 +43,10 @@ defmodule Mix.Tasks.Porthole.K8s.Up do
       (default: your user name).
     * `--image IMAGE` - the sidecar image (default: the published
       `ghcr.io/mimiquate/porthole-sidecar:latest`).
+    * `--trace` - let the agent trace (`Porthole.Trace`): who sends to a
+      process, where time goes, why processes exit. Off by default.
+    * `--trace-shapes` - also let traces record shapes (implies `--trace`).
+      Off by default: shapes show map keys, which can be personal data.
 
   Set `PORTHOLE_KUBECTL` to use a `kubectl` that is not on the `PATH`.
   """
@@ -57,7 +61,9 @@ defmodule Mix.Tasks.Porthole.K8s.Up do
     container: :string,
     name: :string,
     client: :string,
-    image: :string
+    image: :string,
+    trace: :boolean,
+    trace_shapes: :boolean
   ]
 
   @impl true
@@ -106,7 +112,9 @@ defmodule Mix.Tasks.Porthole.K8s.Up do
     manifest =
       Kube.manifest(sidecar, target, release,
         tokens: "#{client}:#{Porthole.Auth.hash(token)}",
-        image: opts[:image] || Trial.default_image()
+        image: opts[:image] || Trial.default_image(),
+        trace: opts[:trace] == true or opts[:trace_shapes] == true,
+        trace_shapes: opts[:trace_shapes] == true
       )
 
     shell.info("Creating #{sidecar} in #{target.namespace}...")

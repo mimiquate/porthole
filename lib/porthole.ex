@@ -47,10 +47,13 @@ defmodule Porthole do
          do: {:ok, Table.collect(table, %{max_rows: max_rows, call_timeout: 1_000})}
   end
 
-  @doc "Tables and their columns, with documentation."
-  @spec schema() :: [map()]
-  def schema do
-    for table <- Table.all() do
+  @doc """
+  Tables and their columns, with documentation: the snapshot tables, or with
+  `:traces` the tables filled by a trace (see `Porthole.Trace`).
+  """
+  @spec schema(:tables | :traces) :: [map()]
+  def schema(kind \\ :tables) do
+    for table <- if(kind == :traces, do: Table.traces(), else: Table.all()) do
       %{
         name: table.name(),
         description: table.description(),
