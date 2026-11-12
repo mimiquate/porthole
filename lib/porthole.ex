@@ -6,9 +6,12 @@ defmodule Porthole do
       iex> result.rows
       [[1]]
 
-  Tables: `processes`, `supervisors`, `ets_tables`, `applications`; see
-  `schema/0`. Every table has a `node` column. Pass `window_ms:` to sample
-  and get `_delta` columns (e.g. `reductions_delta`).
+  Tables: `processes`, `supervisors`, `ets_tables`, `ports`,
+  `applications`, `system` and `allocators`; see `schema/0`. Every table has
+  a `node` column. Pass `window_ms:` to sample and get `_delta` columns
+  (e.g. `reductions_delta`). With `trace:` too, a query records what happens
+  during the window in a trace table (see `Porthole.Trace` and
+  `schema(:traces)`).
 
   Entry points: `query/2` from Elixir, `print/2` from a remote shell,
   `mix porthole.query` and `mix porthole.mcp`.

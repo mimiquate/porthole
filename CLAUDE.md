@@ -32,7 +32,9 @@ when a real question needs it.
 
 ### In scope (implemented)
 
-- **Tables:** `processes`, `supervisors`, `ets_tables`, `ports`, `applications`, `system`.
+- **Tables:** `processes`, `supervisors`, `ets_tables`, `ports`, `applications`, `system`,
+  `allocators`; and, filled by a trace, `trace_messages`, `trace_calls`, `trace_exits`,
+  `trace_shapes` (see Tracing below).
 - **Windowed sampling:** the `window_ms` option snapshots tables that declare delta
   columns at the start of the window, collects again at the end, and adds
   `<column>_delta` columns (e.g. `reductions_delta`, `memory_delta`, `size_delta`).

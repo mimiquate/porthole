@@ -12,7 +12,8 @@ defmodule Porthole.Tables.System do
   @impl true
   def description,
     do:
-      "One row per node: memory by category, process/atom/port/ETS counts vs limits, run queue. Start here."
+      "One row per node: memory by category, process/atom/port/ETS counts vs limits, run queue, " <>
+        "GC and port I/O counters. Start here."
 
   # There is a single row per node; the release never changes during a window.
   @impl true

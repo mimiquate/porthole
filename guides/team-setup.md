@@ -140,6 +140,11 @@ instead of guessing about runtime state.
 - For resource problems, start with the `system` table, rank with
   `ORDER BY ... LIMIT`, and pass `window_ms` to measure change (`_delta` columns)
   before concluding something is growing.
+- When memory looks wrong, check `allocators` before calling it a leak: memory
+  taken from the OS but not in use is fragmentation, not a leak.
+- If tracing is enabled, use a short `trace` to answer *who* or *why* once a
+  snapshot points at a process or function; results are samples, so read
+  `notes`.
 - Explain findings in terms of our code: group or join by `initial_call`,
   `application` and `supervisors`, not raw pids.
 - Join on `node` as well as pids. Aggregate in SQL; don't fetch raw rows.
@@ -692,7 +697,8 @@ What that means in practice:
 - **CPU.** A `processes` query costs roughly 13 µs of one scheduler per
   process on each node: about 0.1 s at 10k processes and about 1.3 s at 100k.
   It runs at low priority, so it uses spare capacity rather than taking it
-  from your app. `system` and `applications` cost the same on any node;
+  from your app. `system`, `applications` and `allocators` cost the same on
+  any node (milliseconds);
   `ets_tables` and `ports` grow with the number of tables and ports, and
   `supervisors` with the number of supervisors (or with processes, with
   `all_supervisors`).

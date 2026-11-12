@@ -417,6 +417,10 @@ High `binary_mb` with a small `reductions_delta` is the pattern. Usual fixes:
 hibernate the process, or copy the small part of a large binary you keep
 (`:binary.copy/1`) instead of holding a slice of it.
 
+**A mailbox:** `message_queue_len_delta` in the mailbox section; if the
+server enables tracing, a short `messages_to` trace names who keeps sending
+(see [tracing](#tracing-who-where-why)).
+
 **ETS tables, sockets, atoms, persistent terms:** see the ETS and ports
 sections; `atom_count_delta` above zero for long means something converts
 input to atoms (they are never freed), and `persistent_term_memory_delta`
