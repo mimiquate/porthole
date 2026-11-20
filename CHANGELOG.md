@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-11-20
 
 ### Tracing
 
@@ -43,6 +43,7 @@ watchdog also stops a trace when its events hold 24 MB, keeping what came.
 Setup flags processes one at a time, without pausing the node. On a busy
 node a trace returns what it read in time, with a note. Measured costs are
 in the team-setup guide.
+
 ### Memory and load
 
 - **`allocators` table:** one row per VM memory allocator, with the bytes it
@@ -59,6 +60,11 @@ in the team-setup guide.
   memory, find which kind of data grows and where (process state, processes
   that never exit, binaries held by idle processes, ETS, atoms, persistent
   terms), and compare two snapshots minutes apart for slow leaks.
+
+### Fixes
+
+- `fly.up` / `k8s.up` no longer crash when the temporary tunnel exits just
+  as it starts: it is reopened, as for one that exits later.
 
 ## 0.1.1 - 2026-10-07
 
