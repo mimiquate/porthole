@@ -139,10 +139,11 @@ WHERE links_count = 0 AND monitors_count = 0 AND monitored_by_count = 0
 | `ets_tables`   | ETS table         | id, name, owner, type, protection, size, memory                                                           |
 | `ports`        | port / socket     | port, name, owner, local_address, remote_address, os_pid, input, output, queue_size, memory               |
 | `applications` | loaded app        | name, vsn, description, running                                                                           |
-| `system`       | node              | memory by category, process/atom/port/ETS counts vs limits, run_queue, schedulers, uptime                 |
+| `system`       | node              | memory by category, process/atom/port/ETS counts vs limits, run_queue, schedulers, uptime, GC and port I/O counters |
+| `allocators`   | memory allocator  | bytes taken from the OS vs in use (fragmentation), peak, large blocks                                     |
 
 With a window and a `trace` argument, a query can also record what happens
-during the window, in one of three more tables (tracing is off unless the
+during the window, in one of four more tables (tracing is off unless the
 server enables it; see [tracing](guides/team-setup.md#tracing)):
 
 | Table | One row per | Columns |
@@ -155,8 +156,11 @@ server enables it; see [tracing](guides/team-setup.md#tracing)):
 Every table has a `node` column. With a window, `processes` gains
 `reductions_delta`, `memory_delta`, `message_queue_len_delta` and
 `binary_memory_delta`, `ets_tables` gains `size_delta` and `memory_delta`,
-`ports` gains `input_delta`, `output_delta` and `queue_size_delta`, and
-`system` gains deltas for memory, process and port counts, and reductions.
+`ports` gains `input_delta`, `output_delta` and `queue_size_delta`,
+`allocators` gains `used_bytes_delta`, `allocated_bytes_delta` and
+`unused_bytes_delta`, and `system` gains deltas for memory, process, port,
+atom and ETS table counts, persistent terms, reductions, garbage collection
+and port I/O.
 
 ## How it works
 

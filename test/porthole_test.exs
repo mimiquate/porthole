@@ -6,7 +6,7 @@ defmodule PortholeTest do
 
   test "schema/0 lists every table with its sampled columns" do
     assert Enum.map(Porthole.schema(), & &1.name) ==
-             ~w(processes supervisors ets_tables ports applications system)
+             ~w(processes supervisors ets_tables ports applications system allocators)
 
     assert [%{name: "processes", sampled: sampled} | _] = Porthole.schema()
     assert :reductions_delta in sampled

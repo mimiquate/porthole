@@ -12,7 +12,8 @@ defmodule Porthole.Tables.System do
   @impl true
   def description,
     do:
-      "One row per node: memory by category, process/atom/port/ETS counts vs limits, run queue. Start here."
+      "One row per node: memory by category, process/atom/port/ETS counts vs limits, run queue, " <>
+        "GC and port I/O counters. Start here."
 
   # There is a single row per node; the release never changes during a window.
   @impl true
@@ -27,7 +28,15 @@ defmodule Porthole.Tables.System do
       :memory_ets,
       :process_count,
       :port_count,
-      :reductions
+      :atom_count,
+      :ets_count,
+      :persistent_term_count,
+      :persistent_term_memory,
+      :reductions,
+      :gc_count,
+      :gc_bytes_reclaimed,
+      :io_input_bytes,
+      :io_output_bytes
     ]
 
   @impl true
@@ -54,7 +63,16 @@ defmodule Porthole.Tables.System do
       {:memory_ets, :integer, "Bytes used by ETS tables."},
       {:memory_atom, :integer, "Bytes used by atoms."},
       {:memory_code, :integer, "Bytes used by loaded code."},
-      {:memory_system, :integer, "Bytes not attributed to processes."}
+      {:memory_system, :integer, "Bytes not attributed to processes."},
+      {:persistent_term_count, :integer,
+       "Terms in persistent_term (never garbage collected; updating one is expensive)."},
+      {:persistent_term_memory, :integer,
+       "Bytes held by persistent_term (large binaries in terms are counted in memory_binary)."},
+      {:gc_count, :integer,
+       "Garbage collections since start. With a window, gc_count_delta shows GC churn."},
+      {:gc_bytes_reclaimed, :integer, "Bytes reclaimed by garbage collection since start."},
+      {:io_input_bytes, :integer, "Bytes received through ports (sockets, files) since start."},
+      {:io_output_bytes, :integer, "Bytes sent through ports since start."}
     ]
   end
 
@@ -92,7 +110,13 @@ defmodule Porthole.Tables.System do
       memory_ets: memory[:ets],
       memory_atom: memory[:atom],
       memory_code: memory[:code],
-      memory_system: memory[:system]
+      memory_system: memory[:system],
+      persistent_term_count: raw[:persistent_term][:count],
+      persistent_term_memory: raw[:persistent_term][:memory],
+      gc_count: raw[:gc_count],
+      gc_bytes_reclaimed: raw[:gc_bytes_reclaimed],
+      io_input_bytes: raw[:io_input],
+      io_output_bytes: raw[:io_output]
     }
 
     {[row], false}
